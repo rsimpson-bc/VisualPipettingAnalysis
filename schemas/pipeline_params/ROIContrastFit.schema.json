@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ROIContrastFit.schema.json",
+  "title": "ROIContrastFit mode params",
+  "description": "Slides the calibrated ROI polygon over the image and finds the position that maximises the total gradient magnitude inside the ROI. Designed for contrast/accumulated images (e.g. A:B frames); raw frames are accepted but may produce noisier results.",
+  "type": "object",
+  "properties": {
+    "_group_roi": { "type": "string", "const": "--- ROI ---" },
+    "roi_expansion_px": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 0,
+      "description": "Search budget. ROI2 = calibrated ROI1 expanded by this many pixels on every side. The matching template (ROI1) is allowed to slide anywhere within ROI2 to find the best fit; the output polygon is always ROI1's size, just translated to the best position. If 0, no movement is allowed and the result equals ROI1."
+    },
+
+    "_group_preproc": { "type": "string", "const": "--- Pre-processing ---" },
+    "use_ab": {
+      "type": "boolean",
+      "default": false,
+      "description": "True = use A:B accumulated difference frames (recommended for this mode); False = single frame."
+    },
+    "blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur method applied before gradient computation."
+    },
+    "blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian blur kernel size (must be odd). Only used when blur_method = 'gaussian'."
+    },
+    "bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in color space. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
+    },
+
+    "_group_gradient": { "type": "string", "const": "--- Gradient ---" },
+    "gradient_ksize": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 7,
+      "default": 3,
+      "description": "Sobel kernel size for gradient computation (3, 5, or 7). The full gradient magnitude (not thresholded) is used for scoring."
+    },
+
+    "_group_search": { "type": "string", "const": "--- Search ---" },
+    "edge_outward_offset_px": {
+      "type": "integer",
+      "minimum": -50,
+      "maximum": 50,
+      "default": 0,
+      "description": "Contract the matching template inward by this many pixels before fitting, then report the output polygon at its original size. Compensates for the systematic inward bias of gradient-based edge detection (gradient peak lands slightly inside the true tip boundary). Positive values contract the template (typical use); negative values expand it."
+    },
+    "n_coarse_peaks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 3,
+      "description": "Number of top-scoring coarse FFT positions to refine with the fine-grid search."
+    },
+    "refine_range_px": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 5,
+      "description": "Radius in pixels for the fine-grid search around each coarse FFT peak."
+    },
+    "refine_step_px": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Step size in pixels for the fine-grid refinement search."
+    },
+
+    "_group_interp": { "type": "string", "const": "--- Interpreter ---" },
+    "min_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.1,
+      "description": "Minimum normalised score (0–1) for the fitted position to be accepted as a candidate."
+    },
+    "max_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Maximum number of candidates to pass downstream (currently ROIContrastFit always produces at most 1)."
+    },
+
+    "_group_edge_det": { "type": "string", "const": "--- Edge Detection (use_edge_detection=true) ---" },
+    "use_edge_detection": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, the scoring signal is a sparse map of N-of-M confirmed edge points (InwardEdgeScan detector) rather than the continuous Sobel gradient magnitude. The interior sum then equals the number of confirmed edge points enclosed by the ROI at each offset. All parameters in this group are only active when this is enabled."
+    },
+    "confirmation_n": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "N in N-of-M confirmation: minimum number of consecutive edge candidates required to accept a point."
+    },
+    "confirmation_m": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "M in N-of-M confirmation: window size (rows) over which N confirmations must occur."
+    },
+    "intensity_delta": {
+      "type": "number",
+      "minimum": 0,
+      "default": 10,
+      "description": "Minimum intensity difference between inside and outside the tip edge for confirmation."
+    },
+    "intensity_avg_pixels": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Number of pixels averaged on each side of the edge for intensity delta calculation."
+    },
+    "confirmation_brightness_threshold": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 128,
+      "description": "Minimum pixel brightness required inside the tip region to confirm an edge point."
+    },
+    "edge_detection_offset": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Inward offset (px) from the ROI boundary before starting the inward edge scan."
+    },
+    "min_edge_length_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the minimum contiguous edge length filter."
+    },
+    "min_edge_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum number of contiguous edge points required to keep an edge segment."
+    },
+    "consistency_check_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the consistency check that removes points deviating from the local edge trend."
+    },
+    "consistency_window": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Half-window size (rows) used when computing the local trend for the consistency check."
+    },
+    "consistency_sigma": {
+      "type": "number",
+      "minimum": 0,
+      "default": 3.0,
+      "description": "Sigma multiplier for the consistency check deviation threshold."
+    },
+    "outlier_removal_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the outlier removal pass that drops points far from the fitted edge line."
+    },
+    "outlier_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "default": 2.0,
+      "description": "Z-score threshold above which an edge point is considered an outlier and removed."
+    },
+    "detect_left": {
+      "type": "boolean",
+      "default": true,
+      "description": "Scan for the left edge of the tip."
+    },
+    "detect_right": {
+      "type": "boolean",
+      "default": true,
+      "description": "Scan for the right edge of the tip."
+    },
+    "detect_bottom": {
+      "type": "boolean",
+      "default": true,
+      "description": "Scan for the bottom edge of the tip."
+    },
+    "section_offset": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 2,
+      "description": "Vertical overlap (px) added at the boundary between adjacent ROI sections."
+    },
+    "bottom_search_depth": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 20,
+      "description": "Number of rows to search upward from the ROI bottom when detecting the tip bottom edge."
+    },
+    "bottom_scan_half_width": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 50,
+      "description": "Half-width (px) of the horizontal scan window used for bottom edge detection."
+    },
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a per-pixel difference between the sample frame and a reference frame (e.g. tip without liquid) is computed before all other processing. The reference source is set in the A/B Compare dialog or via ImageSet.reference_frames. The contrast image replaces the normal working frame."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' \u2014 output = |sample \u2212 reference|. Values below contrast_min \u2192 0; at or above contrast_max \u2192 255; in between linearly scaled to 0\u2013255.\n\n'relative' \u2014 signed difference centred at grey (127). sample brighter \u2192 > 127; reference brighter \u2192 < 127. |diff| < contrast_min \u2192 127 (neutral); |diff| \u2265 contrast_max \u2192 0 or 255."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to both sample and reference before computing the difference. Independent of any other blur step in the pipeline."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for the contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0\u2013255). Differences smaller than this are suppressed: 0 in absolute mode, 127 (neutral grey) in relative mode. Filters noise and background flicker."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0\u2013255). Differences at or above this are fully saturated. Values between contrast_min and contrast_max are linearly stretched to 0\u2013255. Must be greater than contrast_min."
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "Maps mode_name / integrator_type → relative path of its JSON Schema. Used by the param editor to discover and load schemas at runtime.",
+  "modes": {
+    "IntensityDetection":          "pipeline_params/IntensityDetection.schema.json",
+    "LineContinuity_Terminations": "pipeline_params/LineContinuity_Terminations.schema.json",
+    "LineContinuity_PatternChange":"pipeline_params/LineContinuity_PatternChange.schema.json",
+    "LineContinuity_Correlation":  "pipeline_params/LineContinuity_Correlation.schema.json",
+    "LineContinuity_Density":      "pipeline_params/LineContinuity_Density.schema.json",
+    "ExtremaLines":                "pipeline_params/ExtremaLines.schema.json",
+    "InwardEdgeScan":              "pipeline_params/InwardEdgeScan.schema.json",
+    "WindowContrastAlign":         "pipeline_params/WindowContrastAlign.schema.json",
+    "ROIEdgeFit":                  "pipeline_params/ROIEdgeFit.schema.json",
+    "ROIContrastFit":              "pipeline_params/ROIContrastFit.schema.json"
+  },
+  "integrators": {
+    "LiquidMeasurement":   "pipeline_params/LiquidIntegrator.schema.json",
+    "TipIdentification":   "pipeline_params/TipIntegrator.schema.json"
+  }
+}

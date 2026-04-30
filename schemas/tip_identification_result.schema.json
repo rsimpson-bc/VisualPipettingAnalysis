@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TipIdentificationResult",
+  "description": "Written by PA to Analysis/<step_id>_result.json for TipIdentification steps.",
+  "type": "object",
+  "required": ["step_id", "analysis_type", "command", "pipettes", "overall_status"],
+  "properties": {
+    "step_id": { "type": "string" },
+    "analysis_type": { "type": "string", "const": "TipIdentification" },
+    "command": { "type": "object", "description": "Verbatim echo of the HTTP request payload." },
+    "pipettes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "seating_status", "confidence"],
+        "properties": {
+          "index": { "type": "integer" },
+          "tip_present": { "type": ["boolean", "null"] },
+          "perceived_tip_type": { "type": ["string", "null"] },
+          "tip_type_match": { "type": ["boolean", "null"] },
+          "seating_depth_px": { "type": ["number", "null"] },
+          "tip_angle_deg": { "type": ["number", "null"] },
+          "seating_status": {
+            "type": "string",
+            "enum": ["ok", "warning_angle", "warning_height", "wrong_type", "missing", "unexpected", "low_confidence"]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+          "comments": { "type": "string" }
+        }
+      }
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": ["ok", "warning", "error", "low_confidence"]
+    }
+  }
+}

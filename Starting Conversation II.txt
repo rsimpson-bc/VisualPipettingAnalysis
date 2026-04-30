@@ -1,0 +1,227 @@
+## 1. Executive Summary (TL;DR)
+
+### High-level decisions
+
+*   **PA is a separate repo and app** from Piomek2 and from experimental code.
+*   **Communication model**
+    *   Commands → **HTTP (FastAPI, localhost)**
+    *   Artifacts/results → **Filesystem**
+*   **PA is stateless across runs but stateful within a session**
+*   **All analysis steps are auditable post-run** without Piomek2 re-parsing data.
+
+### Data separation (most important insight)
+
+All data cleanly falls into **three tiers**:
+
+| Tier   | Name                     | Lifetime                    | Owned by     |
+| ------ | ------------------------ | --------------------------- | ------------ |
+| Tier 1 | Instrument Configuration | Months / calibration events | Piomek2      |
+| Tier 2 | Method Context           | Per run                     | Piomek2      |
+| Tier 3 | Step Commands & Results  | Per step                    | Piomek2 → PA |
+
+This keeps calibration stable, execution reproducible, and analysis inspectable.
+
+***
+
+## 2. Recommended Repo & Folder Structure (New PA Repo)
+
+```text
+PipetteAnalysis/
+├── pa/
+│   ├── api/
+│   │   ├── server.py          # FastAPI app
+│   │   ├── session_routes.py
+│   │   └── schemas_http.py    # request validation models
+│   ├── analysis/
+│   │   ├── tip_identification.py
+│   │   ├── liquid_measurement.py
+│   │   └── shared_geometry.py
+│   ├── state/
+│   │   ├── session_state.py   # in-memory per-session state
+│   │   └── loaders.py         # config + context loaders
+│   ├── io/
+│   │   ├── image_loader.py
+│   │   └── result_writer.py
+│   ├── display/
+│   │   └── live_view.py       # optional Qt/Tk window
+│   └── __init__.py
+├── schemas/
+│   ├── instrument_config.schema.json
+│   ├── method_context.schema.json
+│   ├── step_command.schema.json
+│   ├── tip_identification_result.schema.json
+│   └── liquid_measurement_result.schema.json
+├── README.md
+└── pyproject.toml
+```
+
+This matches the architectural boundaries you defined and keeps **schemas explicit and durable**.
+
+***
+
+## 3. Canonical Folder Layout (Created by Piomek2 per run)
+
+```text
+MethodRuns/
+└── run_2026_04_27_143512/
+    ├── method_context.json
+    ├── NoTips/
+    │   └── 0001/
+    │       ├── 1.jpg
+    │       ├── 2.jpg
+    │       └── step_meta.json
+    ├── EmptyTips/
+    ├── FilledTips/
+    └── Analysis/
+        ├── step_0001_result.json
+        ├── step_0002_result.json
+        └── session_summary.json
+```
+
+*   Piomek2 **writes everything except `Analysis/`**
+*   PA **only writes to `Analysis/`**
+
+***
+
+## 4. Schemas (Examples You Can Copy Directly)
+
+### 4.1 Tier 1 — Instrument Config (`instrument_config.json`)
+
+```json
+{
+  "instrument_id": "BIOMEK-SN001",
+  "config_version": "1.2.0",
+  "last_calibrated": "2026-04-27T10:00:00Z",
+  "pixel_to_mm": {
+    "mandrel_y": 0.0412,
+    "mandrel_z": 0.0412,
+    "camera_y": 0.0398,
+    "camera_z": 0.0398
+  },
+  "gripper": {
+    "out_of_box_yzgr": { "y": 12345, "z": 67890, "g": 11111, "r": 22222 },
+    "calibrated_yzgr": { "y": 12350, "z": 67885, "g": 11111, "r": 22222 }
+  },
+  "mandrels": [
+    {
+      "index": 1,
+      "calibrated_pixel_yz": [121, 542],
+      "angle_deg": 0.3
+    }
+  ],
+  "tip_rois": {
+    "T200": {
+      "calibrated": [
+        { "pipette": 1, "y_px": 116, "z_px": 612, "r_deg": 0.1 }
+      ]
+    }
+  }
+}
+```
+
+✅ Changes **only during calibration**  
+✅ Cached by PA at session start
+
+***
+
+### 4.2 Tier 2 — Method Context (`method_context.json`)
+
+```json
+{
+  "run_id": "run_20260427_143512",
+  "method_name": "Aspiration_Test_01",
+  "instrument_config_path": "C:/configs/instrument_config.json",
+  "gripper_z_override": null,
+  "notes": ""
+}
+```
+
+✅ Written once per run  
+✅ Loaded once per PA session
+
+***
+
+### 4.3 Tier 3 — Step Command (HTTP → PA)
+
+```json
+{
+  "step_id": "step_0003",
+  "analysis_type": "LiquidMeasurement",
+  "subfolders": ["FilledTips/0002"],
+  "pipettes": [
+    { "index": 1, "expected_tip_type": "T200", "expected_liquid_ul": 50.0 },
+    { "index": 3, "expected_tip_type": "T200", "expected_liquid_ul": 0.0 }
+  ]
+}
+```
+
+✅ Sent **every time**, no implicit state  
+✅ PA echoes this verbatim into result files
+
+***
+
+### 4.4 Tip Identification Result (PA → filesystem)
+
+```json
+{
+  "step_id": "step_0001",
+  "analysis_type": "TipIdentification",
+  "command": { "... echoed HTTP payload ..." },
+  "pipettes": [
+    {
+      "index": 1,
+      "tip_present": true,
+      "perceived_tip_type": "T200",
+      "tip_type_match": true,
+      "seating_depth_px": 38,
+      "tip_angle_deg": 0.2,
+      "seating_status": "ok",
+      "confidence": 94.0,
+      "comments": ""
+    }
+  ],
+  "overall_status": "ok"
+}
+```
+
+Enums for `seating_status`:
+
+    ok | warning_angle | warning_height | wrong_type
+    missing | unexpected | low_confidence
+
+***
+
+### 4.5 Liquid Measurement Result (PA → filesystem)
+
+```json
+{
+  "step_id": "step_0003",
+  "analysis_type": "LiquidMeasurement",
+  "command": { "... echoed HTTP payload ..." },
+  "pipettes": [
+    {
+      "index": 1,
+      "total_volume_ul": 48.7,
+      "slugs": [
+        {
+          "order": 1,
+          "type": "liquid",
+          "start_px": 380,
+          "end_px": 210,
+          "volume_ul": 48.7
+        }
+      ],
+      "bubbles": [
+        { "slug_order": 1, "location_px": 295, "estimated_volume_ul": 0.4 }
+      ],
+      "droplets": [],
+      "confidence": 91.5,
+      "comments": ""
+    }
+  ],
+  "overall_status": "warning"
+}
+```
+
+✅ Full step-level audit trail  
+✅ Piomek2 only needs `overall_status`

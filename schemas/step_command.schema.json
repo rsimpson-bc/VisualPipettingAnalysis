@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StepCommand",
+  "description": "Tier 3 — per-step HTTP payload sent by Piomek2 to PA.",
+  "type": "object",
+  "required": ["step_id", "analysis_type", "subfolders", "pipettes"],
+  "properties": {
+    "step_id": { "type": "string" },
+    "analysis_type": { "type": "string", "enum": ["TipIdentification", "LiquidMeasurement"] },
+    "subfolders": { "type": "array", "items": { "type": "string" } },
+    "pipettes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "expected_tip_type"],
+        "properties": {
+          "index": { "type": "integer" },
+          "expected_tip_type": { "type": "string" },
+          "expected_liquid_ul": { "type": ["number", "null"] }
+        }
+      }
+    }
+  }
+}

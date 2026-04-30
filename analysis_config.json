@@ -1,0 +1,317 @@
+{
+  "_comment": "PA analysis configuration. Edit this file to tune pipeline parameters.",
+  "pipelines": {
+    "full_liquid": {
+      "name": "full_liquid",
+      "modes": [
+        {
+          "mode_name": "IntensityDetection",
+          "enabled": true,
+          "weight": 0.25,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "use_ab": true,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "intensity_threshold": 0.3,
+            "min_distance": 5
+          }
+        },
+        {
+          "mode_name": "LineContinuity_Terminations",
+          "enabled": true,
+          "weight": 0.2,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "gradient_method": "xy",
+            "gradient_ksize": 3,
+            "ridge_threshold": 30,
+            "angle_tolerance": 30,
+            "morph_kernel_height": 5,
+            "morph_kernel_width": 1,
+            "morph_iterations": 1,
+            "morph_close_enabled": true,
+            "morph_open_enabled": true,
+            "band_height": 10,
+            "termination_window": 0,
+            "threshold": 0.3,
+            "smooth_window": 3,
+            "min_distance": 5,
+            "use_ab": false
+          }
+        },
+        {
+          "mode_name": "LineContinuity_PatternChange",
+          "enabled": true,
+          "weight": 0.15,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "gradient_method": "xy",
+            "gradient_ksize": 3,
+            "ridge_threshold": 30,
+            "angle_tolerance": 30,
+            "morph_kernel_height": 5,
+            "morph_kernel_width": 1,
+            "morph_iterations": 1,
+            "morph_close_enabled": true,
+            "morph_open_enabled": true,
+            "band_height": 10,
+            "threshold": 0.3,
+            "smooth_window": 3,
+            "min_distance": 5,
+            "use_ab": false
+          }
+        },
+        {
+          "mode_name": "LineContinuity_Correlation",
+          "enabled": true,
+          "weight": 0.15,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "gradient_method": "xy",
+            "gradient_ksize": 3,
+            "ridge_threshold": 30,
+            "angle_tolerance": 30,
+            "morph_kernel_height": 5,
+            "morph_kernel_width": 1,
+            "morph_iterations": 1,
+            "morph_close_enabled": true,
+            "morph_open_enabled": true,
+            "band_height": 10,
+            "threshold": 0.5,
+            "min_distance": 5,
+            "use_ab": false
+          }
+        },
+        {
+          "mode_name": "LineContinuity_Density",
+          "enabled": true,
+          "weight": 0.1,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "gradient_method": "xy",
+            "gradient_ksize": 3,
+            "ridge_threshold": 30,
+            "angle_tolerance": 30,
+            "morph_kernel_height": 5,
+            "morph_kernel_width": 1,
+            "morph_iterations": 1,
+            "morph_close_enabled": true,
+            "morph_open_enabled": true,
+            "band_height": 10,
+            "threshold": 0.3,
+            "smooth_window": 3,
+            "min_distance": 5,
+            "use_ab": false
+          }
+        },
+        {
+          "mode_name": "ExtremaLines",
+          "enabled": true,
+          "weight": 0.15,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "use_ab": false,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "neighborhood": 3,
+            "stitch_gap": 3,
+            "angle_tolerance": 90,
+            "angle_mode": "A",
+            "angle_lock_points": 0,
+            "min_line_length": 5,
+            "max_gap": 1,
+            "merge_angle_tol": 0,
+            "merge_row_sep": 0,
+            "merge_col_sep": 1,
+            "s5_vgap": 1,
+            "s5_hgap": 1,
+            "s5_angle": 10,
+            "s5_pts": 10,
+            "term_window": 0,
+            "detrend_method": "linear",
+            "detrend_degree": 2,
+            "trough_threshold": -0.1,
+            "peak_threshold": 0.1,
+            "min_distance": 5
+          }
+        }
+      ],
+      "integrator_params": {
+        "cluster_window_px": 15,
+        "quorum_threshold": 1.0,
+        "spread_flag_threshold": 0.2
+      }
+    },
+    "fast_liquid": {
+      "name": "fast_liquid",
+      "modes": [
+        {
+          "mode_name": "IntensityDetection",
+          "enabled": true,
+          "weight": 1.0,
+          "params": {
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "use_ab": true,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "intensity_threshold": 0.3,
+            "min_distance": 5
+          }
+        }
+      ],
+      "integrator_params": {
+        "cluster_window_px": 15,
+        "quorum_threshold": 0.5,
+        "spread_flag_threshold": 0.3
+      }
+    },
+    "full_tip": {
+      "name": "full_tip",
+      "modes": [
+        {
+          "mode_name": "InwardEdgeScan",
+          "enabled": true,
+          "weight": 0.6,
+          "params": {
+            "roi_expansion_px": 100,
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
+            "use_ab": false,
+            "gradient_ksize": 3,
+            "gradient_threshold": 30.0,
+            "edge_detection_offset": 0,
+            "confirmation_n": 1,
+            "confirmation_m": 2,
+            "intensity_delta": 10.0,
+            "intensity_avg_pixels": 1,
+            "confirmation_brightness_threshold": 128,
+            "min_edge_length_enabled": true,
+            "min_edge_length": 5,
+            "consistency_check_enabled": true,
+            "consistency_window": 3,
+            "consistency_sigma": 3.0,
+            "outlier_removal_enabled": true,
+            "outlier_threshold": 2.0,
+            "detect_left": true,
+            "detect_right": true,
+            "detect_bottom": true,
+            "section_offset": 2,
+            "bottom_search_depth": 20,
+            "bottom_scan_half_width": 50,
+            "min_confidence": 0.3,
+            "max_candidates": 3
+          }
+        },
+        {
+          "mode_name": "WindowContrastAlign",
+          "enabled": false,
+          "weight": 0.4,
+          "params": {
+            "roi_expansion_px": 0,
+            "blur_kernel": 5,
+            "blur_method": "gaussian",
+            "use_ab": false,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "window_width": 10,
+            "scan_range": 20,
+            "min_confidence": 0.3,
+            "max_candidates": 3
+          }
+        },
+        {
+          "mode_name": "ROIEdgeFit",
+          "enabled": true,
+          "weight": 0.6,
+          "params": {
+            "roi_expansion_px": 0,
+            "use_ab": false,
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
+            "scoring_signal": "raw_intensity",
+            "gradient_ksize": 3,
+            "gradient_threshold": 30.0,
+            "edge_outward_offset_px": 0,
+            "search_range_px": 100,
+            "n_coarse_peaks": 3,
+            "refine_range_px": 5,
+            "refine_step_px": 1,
+            "score_falloff_type": "gaussian",
+            "score_falloff_px": 10.0,
+            "score_cutoff_px": 0.0,
+            "min_confidence": 0.1,
+            "max_candidates": 1,
+            "use_edge_detection": true,
+            "confirmation_n": 1,
+            "confirmation_m": 2,
+            "intensity_delta": 12.0,
+            "intensity_avg_pixels": 3,
+            "confirmation_brightness_threshold": 128,
+            "edge_detection_offset": 0,
+            "min_edge_length_enabled": true,
+            "min_edge_length": 5,
+            "consistency_check_enabled": true,
+            "consistency_window": 3,
+            "consistency_sigma": 3.0,
+            "outlier_removal_enabled": true,
+            "outlier_threshold": 2.0,
+            "detect_left": true,
+            "detect_right": true,
+            "detect_bottom": true,
+            "section_offset": 2,
+            "bottom_search_depth": 20,
+            "bottom_scan_half_width": 50,
+            "use_contrast": true,
+            "contrast_mode": "absolute",
+            "contrast_blur_method": "gaussian",
+            "contrast_blur_kernel": 5,
+            "contrast_bilateral_d": 9,
+            "contrast_bilateral_sigma_color": 75.0,
+            "contrast_bilateral_sigma_space": 75.0,
+            "contrast_min": 0.0,
+            "contrast_max": 100.0
+          }
+        },
+        {
+          "mode_name": "ROIContrastFit",
+          "enabled": false,
+          "weight": 0.6,
+          "params": {
+            "use_ab": false,
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
+            "gradient_ksize": 3,
+            "search_range_px": 50,
+            "n_coarse_peaks": 3,
+            "refine_range_px": 5,
+            "refine_step_px": 1,
+            "use_edge_detection": false,
+            "min_confidence": 0.1,
+            "max_candidates": 1
+          }
+        }
+      ],
+      "integrator_params": {
+        "consensus_window_px": 10,
+        "min_modes_for_consensus": 1
+      }
+    }
+  }
+}

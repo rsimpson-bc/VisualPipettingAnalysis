@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "RidgeExtractor.schema.json",
+  "title": "RidgeExtractor shared params",
+  "description": "Shared extractor params used by all four LineContinuity modes (Terminations, PatternChange, Correlation, Density). All four modes receive the same params dict; only relevant fields are used per mode.",
+  "type": "object",
+  "properties": {
+    "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },
+    "blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur method applied before gradient computation. 'none' skips blurring."
+    },
+    "blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian blur kernel size (must be odd). Only used when blur_method = 'gaussian'."
+    },
+    "bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in color space. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
+    },
+
+    "_group_gradient": { "type": "string", "const": "--- Gradient / ridge detection ---" },
+    "gradient_method": {
+      "type": "string",
+      "enum": ["none", "xy", "x", "y"],
+      "default": "xy",
+      "description": "Sobel gradient direction used to build the ridge magnitude map. 'xy' = combined (default, keeps current behaviour). 'x' = |Gx| (vertical ridges only). 'y' = |Gy| (horizontal ridges). 'none' = use pixel intensity directly."
+    },
+    "gradient_ksize": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 7,
+      "default": 3,
+      "description": "Sobel kernel size. Use 3, 5, or 7 (odd values only)."
+    },
+    "gradient_direction": {
+      "type": "string",
+      "enum": ["xy", "x", "y"],
+      "default": "xy",
+      "description": "Gradient direction for Sobel operator. 'xy' uses combined magnitude."
+    },
+    "ridge_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "default": 30,
+      "description": "Minimum gradient magnitude to flag a pixel as a ridge."
+    },
+    "angle_tolerance": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 90,
+      "default": 30,
+      "description": "±degrees from horizontal accepted as a vertical-line gradient. Smaller = stricter vertical orientation filter."
+    },
+    "morph_kernel_height": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Height (rows) of the morphological structuring element used for close/open operations."
+    },
+    "morph_kernel_width": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 15,
+      "default": 1,
+      "description": "Width (cols) of the morphological structuring element."
+    },
+    "morph_iterations": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "default": 1,
+      "description": "Number of morphological close/open iterations. 0 = disabled."
+    },
+    "morph_close_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Apply morphological closing to connect nearby ridge pixels."
+    },
+    "morph_open_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Apply morphological opening to remove small isolated ridge pixels."
+    },
+    "band_height": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10,
+      "description": "Row count of each comparison band for pattern/correlation/density signals."
+    },
+    "termination_window": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "±row window for aggregating termination counts. 0 = exact row only."
+    },
+    "use_ab": {
+      "type": "boolean",
+      "default": false,
+      "description": "True = use A:B accumulated difference frames; False = single frame."
+    }
+  },
+  "additionalProperties": false
+}

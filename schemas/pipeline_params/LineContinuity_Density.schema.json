@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "LineContinuity_Density.schema.json",
+  "title": "LineContinuity_Density mode params",
+  "description": "Detects liquid boundaries as dips in per-row ridge density (ridges per unit height). Shares extractor params with all LineContinuity modes.",
+  "type": "object",
+  "allOf": [{ "$ref": "RidgeExtractor.schema.json" }],
+  "properties": {
+    "threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.3,
+      "description": "Normalised signal threshold for peak detection (0–1)."
+    },
+    "smooth_window": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Moving-average smoothing window applied before peak detection. 1 = no smoothing."
+    },
+    "min_distance": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum pixel distance between adjacent candidates."
+    },
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a per-pixel difference between the sample frame and a reference frame (e.g. tip without liquid) is computed before all other processing. The reference source is set in the A/B Compare dialog or via ImageSet.reference_frames. The contrast image replaces the normal working frame."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' \u2014 output = |sample \u2212 reference|. Values below contrast_min \u2192 0; at or above contrast_max \u2192 255; in between linearly scaled to 0\u2013255.\n\n'relative' \u2014 signed difference centred at grey (127). sample brighter \u2192 > 127; reference brighter \u2192 < 127. |diff| < contrast_min \u2192 127 (neutral); |diff| \u2265 contrast_max \u2192 0 or 255."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to both sample and reference before computing the difference. Independent of any other blur step in the pipeline."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for the contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0\u2013255). Differences smaller than this are suppressed: 0 in absolute mode, 127 (neutral grey) in relative mode. Filters noise and background flicker."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0\u2013255). Differences at or above this are fully saturated. Values between contrast_min and contrast_max are linearly stretched to 0\u2013255. Must be greater than contrast_min."
+    }
+  },
+  "additionalProperties": false
+}

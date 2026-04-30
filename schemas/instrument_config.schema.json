@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InstrumentConfig",
+  "description": "Tier 1 — stable calibration data. Changes only during calibration events.",
+  "type": "object",
+  "required": ["instrument_id", "config_version", "last_calibrated", "pixel_to_mm"],
+  "properties": {
+    "instrument_id": { "type": "string" },
+    "config_version": { "type": "string" },
+    "last_calibrated": { "type": "string", "format": "date-time" },
+    "pixel_to_mm": {
+      "type": "object",
+      "properties": {
+        "mandrel_y": { "type": "number" },
+        "mandrel_z": { "type": "number" },
+        "camera_y": { "type": "number" },
+        "camera_z": { "type": "number" }
+      },
+      "required": ["mandrel_y", "mandrel_z", "camera_y", "camera_z"]
+    },
+    "gripper": {
+      "type": "object",
+      "properties": {
+        "out_of_box_yzgr": { "$ref": "#/definitions/yzgr" },
+        "calibrated_yzgr": { "$ref": "#/definitions/yzgr" }
+      }
+    },
+    "mandrels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "integer" },
+          "calibrated_pixel_yz": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "angle_deg": { "type": "number" }
+        }
+      }
+    },
+    "tip_rois": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "calibrated": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pipette": { "type": "integer" },
+                "y_px": { "type": "number" },
+                "z_px": { "type": "number" },
+                "r_deg": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "camera_calibration": {
+      "type": "object",
+      "description": "Lens distortion + rotation calibration derived from checkerboard images.",
+      "properties": {
+        "camera_matrix": {
+          "type": "array",
+          "description": "3x3 intrinsic camera matrix [[fx,0,cx],[0,fy,cy],[0,0,1]]",
+          "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "dist_coeffs": {
+          "type": "array",
+          "description": "Distortion coefficients [k1, k2, p1, p2, k3]",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 14
+        },
+        "image_size": {
+          "type": "array",
+          "description": "Image dimensions [width_px, height_px] used during calibration",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "rotation_deg": {
+          "type": "number",
+          "description": "Camera rotation correction in degrees. Positive = counter-clockwise."
+        },
+        "rms_reprojection_error": {
+          "type": "number",
+          "description": "Root-mean-square reprojection error in pixels. < 1.0 is acceptable."
+        },
+        "n_images_used": {
+          "type": "integer",
+          "description": "Number of checkerboard images that contributed to this calibration."
+        },
+        "calibrated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp when calibration was last accepted."
+        }
+      },
+      "required": ["camera_matrix", "dist_coeffs", "image_size"]
+    }
+  },
+  "definitions": {
+    "yzgr": {
+      "type": "object",
+      "properties": {
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "g": { "type": "number" },
+        "r": { "type": "number" }
+      }
+    }
+  }
+}

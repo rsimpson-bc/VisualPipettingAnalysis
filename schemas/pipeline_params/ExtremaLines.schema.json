@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ExtremaLines.schema.json",
+  "title": "ExtremaLines mode params",
+  "description": "Stitches per-row local extrema into vertical lines, then produces a detrended density signal and a detrended termination signal. Two ZProfiles are emitted and weighted independently.",
+  "type": "object",
+  "properties": {
+    "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },
+    "blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur method applied before extrema detection. 'none' skips blurring."
+    },
+    "blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian blur kernel size (must be odd). Only used when blur_method = 'gaussian'."
+    },
+    "bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in color space. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
+    },
+    "use_ab": {
+      "type": "boolean",
+      "default": false,
+      "description": "True = use A:B accumulated difference frames; False = single frame."
+    },
+
+    "_group_gradient": { "type": "string", "const": "--- Gradient pre-processing ---" },
+    "gradient_method": {
+      "type": "string",
+      "enum": ["none", "xy", "x", "y"],
+      "default": "none",
+      "description": "Optional Sobel gradient step applied after blur. 'none' = disabled (extrema detected on intensity). 'xy' = combined magnitude. 'x' = |Gx|. 'y' = |Gy|."
+    },
+    "gradient_ksize": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 7,
+      "default": 3,
+      "description": "Sobel kernel size. Use 3, 5, or 7 (odd values only)."
+    },
+
+    "_group_detection": { "type": "string", "const": "--- Extrema detection ---" },
+    "neighborhood": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 3,
+      "description": "±column radius for local min/max detection."
+    },
+
+    "_group_stitching": { "type": "string", "const": "--- Line stitching ---" },
+    "stitch_gap": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Max column distance to stitch adjacent extrema points into one line (alias for max_gap)."
+    },
+    "max_gap": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "description": "Max skipped rows allowed during forward stitching."
+    },
+    "angle_tolerance": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 90,
+      "default": 90,
+      "description": "Max degrees from vertical allowed when extending a line. 90 = no angle constraint."
+    },
+    "angle_mode": {
+      "type": "string",
+      "enum": ["A", "B"],
+      "default": "A",
+      "description": "A = measure angle from line start; B = use recent-point running average."
+    },
+    "angle_lock_points": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Lock the angle measurement after this many points. 0 = recompute every point."
+    },
+    "min_line_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum vertical span (rows) to keep a stitched line."
+    },
+
+    "_group_merge": { "type": "string", "const": "--- Stage-5 endpoint-angle merge ---" },
+    "merge_angle_tol": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0,
+      "description": "Post-stitch merge: max endpoint angle difference (deg). 0 = disabled."
+    },
+    "merge_row_sep": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Post-stitch merge: max row gap between line endpoints to attempt merge."
+    },
+    "merge_col_sep": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "description": "Post-stitch merge: max column gap between line endpoints."
+    },
+    "s5_vgap": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "description": "Stage-5 endpoint merge: vertical gap tolerance (rows)."
+    },
+    "s5_hgap": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "description": "Stage-5 endpoint merge: horizontal gap tolerance (cols)."
+    },
+    "s5_angle": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 90,
+      "default": 10,
+      "description": "Stage-5 endpoint merge: max endpoint angle difference (deg)."
+    },
+    "s5_pts": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10,
+      "description": "Stage-5 endpoint merge: number of points used for angle estimation."
+    },
+
+    "_group_signals": { "type": "string", "const": "--- Signal extraction ---" },
+    "term_window": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "±rows to accumulate termination counts. 0 = exact row only."
+    },
+    "detrend_method": {
+      "type": "string",
+      "enum": ["linear", "polynomial"],
+      "default": "linear",
+      "description": "Detrending method for both output signals."
+    },
+    "detrend_degree": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "default": 2,
+      "description": "Polynomial degree — only used when detrend_method = 'polynomial'."
+    },
+
+    "_group_interpreter": { "type": "string", "const": "--- Interpreter thresholds ---" },
+    "trough_threshold": {
+      "type": "number",
+      "maximum": 0,
+      "default": -0.1,
+      "description": "Density signal: detrended residual must be below this value (negative). Deeper troughs = more confident candidate."
+    },
+    "peak_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0.1,
+      "description": "Termination signal: detrended residual must be above this value."
+    },
+    "min_distance": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum pixel distance between adjacent candidates."
+    },
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a per-pixel difference between the sample frame and a reference frame (e.g. tip without liquid) is computed before all other processing. The reference source is set in the A/B Compare dialog or via ImageSet.reference_frames. The contrast image replaces the normal working frame."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' \u2014 output = |sample \u2212 reference|. Values below contrast_min \u2192 0; at or above contrast_max \u2192 255; in between linearly scaled to 0\u2013255.\n\n'relative' \u2014 signed difference centred at grey (127). sample brighter \u2192 > 127; reference brighter \u2192 < 127. |diff| < contrast_min \u2192 127 (neutral); |diff| \u2265 contrast_max \u2192 0 or 255."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to both sample and reference before computing the difference. Independent of any other blur step in the pipeline."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for the contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0\u2013255). Differences smaller than this are suppressed: 0 in absolute mode, 127 (neutral grey) in relative mode. Filters noise and background flicker."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0\u2013255). Differences at or above this are fully saturated. Values between contrast_min and contrast_max are linearly stretched to 0\u2013255. Must be greater than contrast_min."
+    }
+  },
+  "additionalProperties": false
+}

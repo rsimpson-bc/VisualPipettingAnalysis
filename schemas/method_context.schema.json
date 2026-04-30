@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MethodContext",
+  "description": "Tier 2 — per-run context. Written once by Piomek2 at run start.",
+  "type": "object",
+  "required": ["run_id", "method_name", "instrument_config_path"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "method_name": { "type": "string" },
+    "instrument_config_path": { "type": "string" },
+    "gripper_z_override": { "type": ["number", "null"] },
+    "notes": { "type": "string" }
+  }
+}

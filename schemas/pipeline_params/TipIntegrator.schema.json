@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "TipIntegrator.schema.json",
+  "title": "Tip integrator params",
+  "description": "Controls how TipCandidates from all active tip modes are cross-validated into a single TipIdentificationResult.",
+  "type": "object",
+  "properties": {
+    "consensus_window_px": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10,
+      "description": "Candidates from different modes within this many pixels are considered to agree and vote for the same location."
+    },
+    "min_modes_for_consensus": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Minimum number of distinct modes that must agree on a location to produce a confident result. 1 = any single mode is sufficient."
+    }
+  },
+  "additionalProperties": false
+}

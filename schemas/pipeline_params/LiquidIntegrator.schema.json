@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "LiquidIntegrator.schema.json",
+  "title": "Liquid integrator params",
+  "description": "Controls how POIs from all active liquid modes are merged into a single LiquidMeasurementResult.",
+  "type": "object",
+  "properties": {
+    "cluster_window_px": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 15,
+      "description": "POIs within this many pixels of each other are merged into the same cluster."
+    },
+    "quorum_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "default": 1.0,
+      "description": "Minimum cluster score (sum of member weights) to produce a confident result. Increase to require stronger multi-mode agreement."
+    },
+    "spread_flag_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.2,
+      "description": "If the top-2 cluster scores are within this fractional ratio of each other, the result is flagged as low_confidence. Lower = stricter."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "IntensityDetection.schema.json",
+  "title": "IntensityDetection mode params",
+  "description": "Per-row intensity signal from A:B frame accumulation. Simple, fast baseline mode.",
+  "type": "object",
+  "properties": {
+    "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },
+    "blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur method applied before intensity extraction. 'none' skips blurring."
+    },
+    "blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Kernel size for Gaussian blur. Must be odd. Only used when blur_method = 'gaussian'."
+    },
+    "bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in color space. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
+    },
+    "use_ab": {
+      "type": "boolean",
+      "default": true,
+      "description": "True = use A:B accumulated difference frames; False = single frame only."
+    },
+
+    "_group_gradient": { "type": "string", "const": "--- Gradient pre-processing ---" },
+    "gradient_method": {
+      "type": "string",
+      "enum": ["none", "xy", "x", "y"],
+      "default": "none",
+      "description": "Optional Sobel gradient step applied after blur. 'none' = disabled (use intensity). 'xy' = combined magnitude. 'x' = |Gx|. 'y' = |Gy|."
+    },
+    "gradient_ksize": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 7,
+      "default": 3,
+      "description": "Sobel kernel size. Use 3, 5, or 7 (odd values only)."
+    },
+
+    "intensity_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.3,
+      "description": "Normalised intensity minimum to count a row as a candidate (0–1)."
+    },
+    "min_distance": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum pixel distance between adjacent candidates."
+    },
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a per-pixel difference between the sample frame and a reference frame (e.g. tip without liquid) is computed before all other processing. The reference source is set in the A/B Compare dialog or via ImageSet.reference_frames. The contrast image replaces the normal working frame."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' \u2014 output = |sample \u2212 reference|. Values below contrast_min \u2192 0; at or above contrast_max \u2192 255; in between linearly scaled to 0\u2013255.\n\n'relative' \u2014 signed difference centred at grey (127). sample brighter \u2192 > 127; reference brighter \u2192 < 127. |diff| < contrast_min \u2192 127 (neutral); |diff| \u2265 contrast_max \u2192 0 or 255."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to both sample and reference before computing the difference. Independent of any other blur step in the pipeline."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for the contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0\u2013255). Differences smaller than this are suppressed: 0 in absolute mode, 127 (neutral grey) in relative mode. Filters noise and background flicker."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0\u2013255). Differences at or above this are fully saturated. Values between contrast_min and contrast_max are linearly stretched to 0\u2013255. Must be greater than contrast_min."
+    }
+  },
+  "additionalProperties": false
+}
