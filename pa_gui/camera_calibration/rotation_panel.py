@@ -38,29 +38,36 @@ from PySide6.QtWidgets import (
 
 class _LineDrawView(QGraphicsView):
     """
-    Zoomable QGraphicsView that lets the user click two points to define a line.
-    Emits angle_computed(degrees) after the second click.
+    Zoomable/pannable QGraphicsView that lets the user click two points to
+    define a line.  Emits angle_computed(degrees) after the second click.
 
-    Coordinate system: click positions are reported in image (scene) coordinates,
-    so they are independent of zoom level.
+    Left-click (no drag)  → place a point
+    Left-drag             → pan the view
+    Scroll wheel          → zoom (anchored under cursor)
     """
 
     angle_computed: Signal = Signal(float)
+    _PAN_THRESHOLD = 5   # pixels of movement before treating as a drag
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
         self._pixmap_item: Optional[QGraphicsPixmapItem] = None
-        self._points: List[QPointF] = []          # image-space coordinates
-        self._overlay_items: list = []            # QGraphicsItems for the line overlay
-        self._user_zoomed = False                 # suppress fitInView on resize once user zooms
+        self._points: List[QPointF] = []
+        self._overlay_items: list = []
+        self._user_zoomed = False
 
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        # Panning state (left-drag)
+        self._pan_active = False
+        self._pan_start = None      # QPoint in viewport coords
+
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(QColor(17, 17, 17))
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
         placeholder = QLabel("(load an image to draw a reference line)")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -87,31 +94,41 @@ class _LineDrawView(QGraphicsView):
     # ── Events ────────────────────────────────────────────────────────
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._pixmap_item is None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pan_active = False
+            self._pan_start = event.pos()
+        else:
             super().mousePressEvent(event)
-            return
-        if event.button() != Qt.MouseButton.LeftButton:
-            super().mousePressEvent(event)
-            return
 
-        scene_pt = self.mapToScene(event.pos())
-        # Clamp to pixmap bounds
-        r = self._scene.sceneRect()
-        if not r.contains(scene_pt):
-            super().mousePressEvent(event)
-            return
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._pan_start is not None:
+            delta = event.pos() - self._pan_start
+            if not self._pan_active and (
+                abs(delta.x()) > self._PAN_THRESHOLD
+                or abs(delta.y()) > self._PAN_THRESHOLD
+            ):
+                self._pan_active = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            if self._pan_active:
+                # Scroll the view by the drag delta
+                h_bar = self.horizontalScrollBar()
+                v_bar = self.verticalScrollBar()
+                h_bar.setValue(h_bar.value() - delta.x())
+                v_bar.setValue(v_bar.value() - delta.y())
+                self._pan_start = event.pos()
+        else:
+            super().mouseMoveEvent(event)
 
-        if len(self._points) >= 2:
-            self.clear_line()
-
-        self._points.append(scene_pt)
-        self._draw_overlay()
-
-        if len(self._points) == 2:
-            dx = self._points[1].x() - self._points[0].x()
-            dy = self._points[1].y() - self._points[0].y()
-            angle_deg = math.degrees(math.atan2(-dy, dx))
-            self.angle_computed.emit(angle_deg)
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._pan_start is not None:
+            if not self._pan_active:
+                # It was a click — place a point
+                self._place_point(event.pos())
+            self._pan_active = False
+            self._pan_start = None
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
@@ -123,59 +140,42 @@ class _LineDrawView(QGraphicsView):
         if not self._user_zoomed and self._scene.sceneRect().isValid():
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
+    # ── Point placement ───────────────────────────────────────────────
+
+    def _place_point(self, viewport_pos) -> None:
+        if self._pixmap_item is None:
+            return
+        scene_pt = self.mapToScene(viewport_pos)
+        if not self._scene.sceneRect().contains(scene_pt):
+            return
+        if len(self._points) >= 2:
+            self.clear_line()
+        self._points.append(scene_pt)
+        self._draw_overlay()
+        if len(self._points) == 2:
+            dx = self._points[1].x() - self._points[0].x()
+            dy = self._points[1].y() - self._points[0].y()
+            self.angle_computed.emit(math.degrees(math.atan2(-dy, dx)))
+
     # ── Overlay drawing ───────────────────────────────────────────────
 
     def _draw_overlay(self) -> None:
         r = 6
-        pen_dot  = QPen(QColor("#e74c3c"), 2)
-        pen_line = QPen(QColor("#e74c3c"), 2)
-
+        pen = QPen(QColor("#e74c3c"), 2)
         for pt in self._points:
             item = QGraphicsEllipseItem(pt.x() - r, pt.y() - r, r * 2, r * 2)
-            item.setPen(pen_dot)
+            item.setPen(pen)
             item.setBrush(Qt.BrushStyle.NoBrush)
             self._scene.addItem(item)
             self._overlay_items.append(item)
-
         if len(self._points) == 2:
             line = QGraphicsLineItem(
                 self._points[0].x(), self._points[0].y(),
                 self._points[1].x(), self._points[1].y(),
             )
-            line.setPen(pen_line)
+            line.setPen(pen)
             self._scene.addItem(line)
             self._overlay_items.append(line)
-
-
-        self._pixmap_original = pixmap
-        self._points = []
-        self._refresh()
-
-    def clear_line(self) -> None:
-        self._points = []
-        self._refresh()
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._pixmap_original is None:
-            return
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-
-        # Map click position to image coordinates (accounting for centred scaling)
-        lw, lh = self.width(), self.height()
-        pm = self._pixmap_original.scaled(
-            lw, lh,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        offset_x = (lw - pm.width()) / 2
-        offset_y = (lh - pm.height()) / 2
-
-        img_x = event.position().x() - offset_x
-        img_y = event.position().y() - offset_y
-
-        if img_x < 0 or img_y < 0 or img_x > pm.width() or img_y > pm.height():
-            return
 
 class RotationPanel(QWidget):
     """

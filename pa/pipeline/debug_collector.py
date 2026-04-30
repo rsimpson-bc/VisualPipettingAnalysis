@@ -26,6 +26,7 @@ from pa.pipeline.types import (
     PointOfInterest, TipCandidate,
 )
 from pa.pipeline.cache import ProcessedImageCache
+from pa.pipeline import image_primitives as ip_module
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,9 @@ def collect_intensity_stages(
     poi_list: List[PointOfInterest],
     cache: ProcessedImageCache,
     params: dict,
+    roi: Optional[tuple] = None,
+    roi_points: Optional[List[tuple]] = None,
+    image_size: Optional[tuple] = None,
 ) -> List[DebugStage]:
     stages = []
     blur_p = {"method": params.get("blur_method", "gaussian"),
@@ -95,7 +99,38 @@ def collect_intensity_stages(
         if s2:
             stages.insert(0, s2)
 
+    # If roi_expansion_px > 0, derive ROI3 (expanded polygon) and expand the
+    # bbox to match the region the extractor analysed.  ROI1 keeps the
+    # original calibrated polygon for visual reference.
+    expansion = int(params.get("roi_expansion_px", 0) or 0)
+    expanded_points: Optional[List[tuple]] = None
+    expanded_bbox: Optional[tuple] = None
+    if expansion > 0 and roi_points and image_size is not None:
+        img_h, img_w = image_size[0], image_size[1]
+        expanded_points = ip_module.expand_roi_points(
+            roi_points, expansion, img_h, img_w,
+        )
+        xs = [p[0] for p in expanded_points]
+        ys = [p[1] for p in expanded_points]
+        x0 = max(0, int(min(xs)))
+        y0 = max(0, int(min(ys)))
+        x1 = min(img_w, int(max(xs)) + 1)
+        y1 = min(img_h, int(max(ys)) + 1)
+        expanded_bbox = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
     poi_z = [p.z_px for p in poi_list]
+    meta: dict = {
+        "threshold": params.get("intensity_threshold", 0.3),
+        "candidates": len(poi_z),
+    }
+    effective_bbox = expanded_bbox if expanded_bbox is not None else roi
+    if effective_bbox is not None:
+        meta["roi"] = list(effective_bbox)         # [x, y, w, h]
+        meta["display_bbox"] = list(effective_bbox)  # used by ROI overlay drawing
+    if roi_points:
+        meta["roi1_points"] = [list(p) for p in roi_points]
+    if expanded_points:
+        meta["roi3_points"] = [list(p) for p in expanded_points]
     stages.append(DebugStage(
         name="Intensity Signal",
         mode_name="IntensityDetection",
@@ -104,8 +139,7 @@ def collect_intensity_stages(
         z_axis_px=profile.z_axis_px,
         poi_z_px=poi_z,
         description="Per-row mean intensity (normalised). Peaks = candidate transitions.",
-        metadata={"threshold": params.get("intensity_threshold", 0.3),
-                  "candidates": len(poi_z)},
+        metadata=meta,
     ))
     return stages
 

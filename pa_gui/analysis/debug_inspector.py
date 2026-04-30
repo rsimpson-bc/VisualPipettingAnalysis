@@ -82,7 +82,7 @@ def _signal_to_pixmap(
     w: int = _THUMB_W,
     h: int = _THUMB_H,
 ) -> QPixmap:
-    """Render a 1-D signal as a small chart QPixmap (no matplotlib dependency)."""
+    """Render a 1-D signal as a small chart QPixmap (horizontal orientation)."""
     import cv2
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -96,23 +96,32 @@ def _signal_to_pixmap(
     norm = (signal - mn) / (mx - mn)
 
     n = len(norm)
+    if z_axis is not None and len(z_axis) >= 2:
+        z_min, z_max = float(z_axis[0]), float(z_axis[-1])
+    else:
+        z_min, z_max = 0.0, float(n - 1)
+
+    # Horizontal chart: x = intensity, y = row (top→bottom)
     pts = []
     for i, v in enumerate(norm):
-        x = int(i / (n - 1) * (w - 1))
-        y = int((1.0 - v) * (h - 3)) + 1
+        if z_axis is not None and i < len(z_axis):
+            z = float(z_axis[i])
+        else:
+            z = float(i)
+        x = int(v * (w - 3)) + 1
+        y = int((z - z_min) / max(z_max - z_min, 1) * (h - 1))
         pts.append((x, y))
 
     for i in range(len(pts) - 1):
         cv2.line(canvas, pts[i], pts[i + 1], (100, 220, 100), 1)
 
-    # POI markers
+    # POI markers — horizontal lines
     if poi_z is not None and z_axis is not None and len(z_axis) >= 2:
-        z_min, z_max = z_axis[0], z_axis[-1]
         for z in poi_z:
             if z_max > z_min:
                 frac = (z - z_min) / (z_max - z_min)
-                x = int(frac * (w - 1))
-                cv2.line(canvas, (x, 0), (x, h - 1), (0, 80, 255), 1)
+                y = int(frac * (h - 1))
+                cv2.line(canvas, (0, y), (w - 1, y), (0, 80, 255), 1)
 
     return _ndarray_to_pixmap(canvas, w, h)
 

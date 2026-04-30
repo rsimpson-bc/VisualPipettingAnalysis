@@ -179,6 +179,10 @@ def run_liquid_pipeline(
                 if mode_cfg.mode_name == "IntensityDetection":
                     for stage in collect_intensity_stages(
                         image_set.pipette_index, profile, pois, cache, mode_cfg.params,
+                        roi=image_set.roi,
+                        roi_points=image_set.roi_points,
+                        image_size=(image_set.frames[0].shape[0],
+                                    image_set.frames[0].shape[1]) if image_set.frames else None,
                     ):
                         debug_data.add(stage)
                 elif mode_cfg.mode_name.startswith("LineContinuity"):

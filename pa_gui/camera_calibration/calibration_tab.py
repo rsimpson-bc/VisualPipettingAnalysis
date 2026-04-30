@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -175,19 +176,30 @@ class CalibrationTab(QWidget):
 
     def _on_calibration_accepted(self, cal: CameraCalibrationData) -> None:
         if not self._config_path:
-            self._status.setText("No instrument config path set — cannot save.")
+            QMessageBox.warning(
+                self,
+                "No instrument config loaded",
+                "No instrument_config.json is loaded.\n\n"
+                "Browse to your instrument_config.json and click Load, "
+                "then Accept & Save again.",
+            )
             return
         try:
             cal.save_to_config(self._config_path)
         except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Save failed", f"Could not save calibration:\n{exc}")
             self._status.setText(f"Save failed: {exc}")
             return
+
+        # Update the rotation panel immediately with the just-saved calibration
+        # so the undistort notice turns green without waiting for _load_ic.
+        self._rotation_panel.set_calibration(cal.camera_matrix, cal.dist_coeffs)
 
         self._status.setText(
             f"Calibration saved — RMS {cal.rms:.4f} px, {cal.n_images_used} images used.  "
             "Re-do ROI calibration on undistorted images."
         )
-        # Refresh the rotation panel in case it needs to know the calibration was saved
+        # Full UI refresh from disk (updates mandrels, rotation angle, status bar, etc.)
         self._load_ic(self._config_path)
 
     def _on_rotation_saved(self, angle_deg: float) -> None:

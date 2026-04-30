@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
 
 from pa_gui.params.schema_loader import load_mode_schema, load_integrator_schema
 from pa_gui.params.param_form import ParamFormWidget
+from pa_gui.params.mode_docs import ModeDocsView
 
 
 # Tree item roles
@@ -117,9 +119,27 @@ class PipelineConfigEditor(QWidget):
         self._form_header.setWordWrap(False)
         self._form_header.setFixedHeight(20)
         self._form_layout.addWidget(self._form_header)
-        self._form_placeholder = QLabel("<i>Select a mode or integrator to edit its parameters.</i>")
+
+        # Tabs: Parameters | How it works
+        self._tabs = QTabWidget()
+
+        # Parameters tab — hosts placeholder + ParamFormWidget
+        self._params_tab = QWidget()
+        self._params_tab_layout = QVBoxLayout(self._params_tab)
+        self._params_tab_layout.setContentsMargins(0, 0, 0, 0)
+        self._params_tab_layout.setSpacing(4)
+        self._form_placeholder = QLabel(
+            "<i>Select a mode or integrator to edit its parameters.</i>"
+        )
         self._form_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._form_layout.addWidget(self._form_placeholder, 1)
+        self._params_tab_layout.addWidget(self._form_placeholder, 1)
+        self._tabs.addTab(self._params_tab, "Parameters")
+
+        # How-it-works tab — markdown viewer
+        self._docs_view = ModeDocsView()
+        self._tabs.addTab(self._docs_view, "How it works")
+
+        self._form_layout.addWidget(self._tabs, 1)
         splitter.addWidget(self._form_container)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
@@ -281,8 +301,11 @@ class PipelineConfigEditor(QWidget):
         self._ab_btn.setVisible(True)
         self._ab_btn.setEnabled(True)
 
+        # Update the docs tab to match the selected mode
+        self._docs_view.show_mode(mode_name)
+
         if schema is None:
-            self._form_layout.addWidget(
+            self._params_tab_layout.addWidget(
                 QLabel(f"<i>No schema registered for mode: {mode_name}</i>"), 1
             )
             return
@@ -295,7 +318,7 @@ class PipelineConfigEditor(QWidget):
         )
         form.params_changed.connect(lambda: self._on_form_changed(pipeline_name, idx))
         self._current_form = form
-        self._form_layout.addWidget(form, 1)
+        self._params_tab_layout.addWidget(form, 1)
 
     def _load_integrator_form(self, pipeline_name: str, item: QTreeWidgetItem) -> None:
         pipeline = self._config["pipelines"][pipeline_name]
@@ -315,8 +338,11 @@ class PipelineConfigEditor(QWidget):
         )
         self._enabled_chk.setVisible(False)
 
+        # Integrators don't have per-mode docs; clear the tab.
+        self._docs_view.show_mode("")
+
         if schema is None:
-            self._form_layout.addWidget(
+            self._params_tab_layout.addWidget(
                 QLabel(f"<i>No integrator schema for analysis type: {analysis_type}</i>"), 1
             )
             return
@@ -330,21 +356,25 @@ class PipelineConfigEditor(QWidget):
             lambda: self._on_integrator_form_changed(pipeline_name)
         )
         self._current_form = form
-        self._form_layout.addWidget(form, 1)
+        self._params_tab_layout.addWidget(form, 1)
 
     # ── Form helpers ───────────────────────────────────────────────────────────
 
     def _clear_form(self) -> None:
+        """Remove the current ParamFormWidget (or no-schema label) from the
+        Parameters tab and re-show the placeholder. Leaves the docs tab
+        contents alone — callers update it explicitly."""
         self._current_form = None
         self._enabled_chk.setVisible(False)
         self._ab_btn.setVisible(False)
         self._ab_btn.setEnabled(False)
-        # Remove all widgets after the header label
-        while self._form_layout.count() > 2:
-            item = self._form_layout.takeAt(self._form_layout.count() - 1)
-            if item.widget():
-                item.widget().deleteLater()
-        # Re-show placeholder
+        # Remove every widget in the Parameters tab except the placeholder.
+        for i in reversed(range(self._params_tab_layout.count())):
+            item = self._params_tab_layout.itemAt(i)
+            w = item.widget() if item else None
+            if w is not None and w is not self._form_placeholder:
+                self._params_tab_layout.takeAt(i)
+                w.deleteLater()
         self._form_placeholder.setVisible(True)
 
     def _commit_current_form(self) -> None:

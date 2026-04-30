@@ -17,8 +17,9 @@ from PySide6.QtCore import QThread, Signal
 class ABCompareWorker(QThread):
     """Runs one pipeline mode with params_a and params_b on the same image."""
 
-    # stages_a, stages_b, source_image (BGR ndarray), roi_bbox (tuple|None)
-    result_ready = Signal(list, list, object, object)
+    # stages_a, stages_b, source_image (BGR ndarray),
+    # contrast_image_a, contrast_image_b (BGR ndarray or None), roi_bbox (tuple|None)
+    result_ready = Signal(list, list, object, object, object, object)
     progress     = Signal(str)
     error        = Signal(str)
 
@@ -123,7 +124,25 @@ class ABCompareWorker(QThread):
             self.progress.emit("Running B…")
             stages_b = self._run_one(image_set, self._params_b)
 
-            self.result_ready.emit(stages_a, stages_b, source_image, roi_bbox)
+            # Compute contrast display images for each side (used by the dialog
+            # to show the contrast-adjusted source in the signal-stage left strip).
+            contrast_image_a = None
+            contrast_image_b = None
+            if reference_frames:
+                from pa.pipeline import image_primitives as ip
+                ref_display = reference_frames[0]
+                sample = frames[fi]
+                if self._params_a.get("use_contrast", False):
+                    contrast_image_a = ip.build_contrast_working_frame(
+                        sample, ref_display, self._params_a
+                    )
+                if self._params_b.get("use_contrast", False):
+                    contrast_image_b = ip.build_contrast_working_frame(
+                        sample, ref_display, self._params_b
+                    )
+
+            self.result_ready.emit(stages_a, stages_b, source_image,
+                                   contrast_image_a, contrast_image_b, roi_bbox)
 
         except Exception:
             self.error.emit(traceback.format_exc())
@@ -180,6 +199,10 @@ class ABCompareWorker(QThread):
                     from pa.pipeline.debug_collector import collect_intensity_stages
                     for stage in collect_intensity_stages(
                         image_set.pipette_index, profile, pois, cache, params,
+                        roi=image_set.roi,
+                        roi_points=image_set.roi_points,
+                        image_size=(image_set.frames[0].shape[0],
+                                    image_set.frames[0].shape[1]) if image_set.frames else None,
                     ):
                         debug_data.add(stage)
                 elif self._mode_name.startswith("LineContinuity"):

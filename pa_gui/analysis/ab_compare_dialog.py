@@ -62,6 +62,11 @@ _DEBOUNCE_MS = 800
 # ---------------------------------------------------------------------------
 
 class _ZoomableView(QGraphicsView):
+
+    # Emitted while the mouse is over this view.
+    # Value is a 0.0–1.0 fraction of scene height; -1.0 on leave.
+    row_hovered: Signal = Signal(float)
+
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self._title = title
@@ -72,6 +77,9 @@ class _ZoomableView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(QColor(18, 18, 18))
+        self.setMouseTracking(True)
+        self._crosshair_item = None
+        self._user_zoomed = False
         self._show_placeholder()
 
     def _show_placeholder(self):
@@ -89,20 +97,62 @@ class _ZoomableView(QGraphicsView):
 
     def set_pixmap(self, pm: QPixmap):
         self._scene.clear()
+        self._crosshair_item = None   # cleared with scene
+        self._user_zoomed = False     # reset zoom tracking on new image
+        self.resetTransform()
         self._scene.addPixmap(pm)
         self._scene.setSceneRect(QRectF(pm.rect()))
         self.fitInView(self._scene.sceneRect(),
                        Qt.AspectRatioMode.KeepAspectRatio)
 
+    def set_crosshair_frac(self, frac: float) -> None:
+        """Draw a dashed horizontal crosshair at *frac* (0–1) of scene height.
+        Pass frac < 0 to clear."""
+        if self._crosshair_item is not None:
+            try:
+                self._scene.removeItem(self._crosshair_item)
+            except RuntimeError:
+                pass
+            self._crosshair_item = None
+        if frac < 0:
+            return
+        sr = self._scene.sceneRect()
+        if not sr.isValid():
+            return
+        from PySide6.QtWidgets import QGraphicsLineItem
+        y = sr.top() + frac * sr.height()
+        pen = QPen(QColor(255, 160, 0), 0)   # width 0 = cosmetic (1 px regardless of zoom)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        item = QGraphicsLineItem(sr.left(), y, sr.right(), y)
+        item.setPen(pen)
+        self._scene.addItem(item)
+        self._crosshair_item = item
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._scene.sceneRect().isValid():
+        # Only auto-fit while the user hasn't manually zoomed
+        if not self._user_zoomed and self._scene.sceneRect().isValid():
             self.fitInView(self._scene.sceneRect(),
                            Qt.AspectRatioMode.KeepAspectRatio)
 
     def wheelEvent(self, event):
+        self._user_zoomed = True
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self.scale(factor, factor)
+
+    def mouseMoveEvent(self, event):
+        sr = self._scene.sceneRect()
+        if sr.isValid() and sr.height() > 0:
+            scene_y = self.mapToScene(event.pos()).y()
+            frac = max(0.0, min(1.0, (scene_y - sr.top()) / sr.height()))
+            self.set_crosshair_frac(frac)
+            self.row_hovered.emit(frac)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.set_crosshair_frac(-1.0)
+        self.row_hovered.emit(-1.0)
+        super().leaveEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +173,49 @@ def _ndarray_to_pixmap(arr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
+def _signal_pixmap_arr(
+    signal: np.ndarray,
+    z_axis: Optional[np.ndarray] = None,
+    poi_z: Optional[List[float]] = None,
+    w: int = _CHART_W,
+    h: int = _CHART_H,
+    line_thickness: int = 2,
+) -> np.ndarray:
+    """Return a BGR numpy array (h, w, 3) of the horizontal signal chart."""
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    if signal is None or len(signal) < 2:
+        return canvas
+    mn, mx = float(signal.min()), float(signal.max())
+    if mx == mn:
+        return canvas
+    norm = (signal - mn) / (mx - mn)
+    n = len(norm)
+
+    if z_axis is not None and len(z_axis) >= 2:
+        z_min, z_max = float(z_axis[0]), float(z_axis[-1])
+    else:
+        z_min, z_max = 0.0, float(n - 1)
+
+    # Signal line: x = intensity (left→right), y = row (top→bottom)
+    pts = []
+    for i, v in enumerate(norm):
+        z = float(z_axis[i]) if z_axis is not None and i < len(z_axis) else float(i)
+        x = int(v * (w - 14)) + 7
+        y = int((z - z_min) / max(z_max - z_min, 1) * (h - 1))
+        pts.append((x, y))
+    for i in range(len(pts) - 1):
+        cv2.line(canvas, pts[i], pts[i + 1], (100, 220, 100), line_thickness)
+
+    # POI markers — horizontal lines
+    if poi_z is not None and z_axis is not None and len(z_axis) >= 2:
+        for z in poi_z:
+            if z_max > z_min:
+                y = int((z - z_min) / (z_max - z_min) * (h - 1))
+                cv2.line(canvas, (0, y), (w - 1, y), (0, 90, 255), 2)
+
+    return canvas
+
+
 def _signal_pixmap(
     signal: np.ndarray,
     z_axis: Optional[np.ndarray] = None,
@@ -130,31 +223,17 @@ def _signal_pixmap(
     w: int = _CHART_W,
     h: int = _CHART_H,
 ) -> QPixmap:
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    if signal is None or len(signal) < 2:
-        return _ndarray_to_pixmap(canvas)
-    mn, mx = signal.min(), signal.max()
-    if mx == mn:
-        return _ndarray_to_pixmap(canvas)
-    norm = (signal - mn) / (mx - mn)
-    n = len(norm)
-    pts = [(int(i / (n - 1) * (w - 1)), int((1.0 - v) * (h - 14)) + 7)
-           for i, v in enumerate(norm)]
-    for i in range(len(pts) - 1):
-        cv2.line(canvas, pts[i], pts[i + 1], (100, 220, 100), 2)
-    if poi_z is not None and z_axis is not None and len(z_axis) >= 2:
-        z0, z1 = z_axis[0], z_axis[-1]
-        for z in poi_z:
-            if z1 > z0:
-                x = int((z - z0) / (z1 - z0) * (w - 1))
-                cv2.line(canvas, (x, 0), (x, h - 1), (0, 90, 255), 2)
-    return _ndarray_to_pixmap(canvas)
+    """Render a 1-D signal as a horizontal chart (Y = row/Z, X = intensity)."""
+    return _ndarray_to_pixmap(_signal_pixmap_arr(signal, z_axis, poi_z, w, h))
 
 
 def _stage_to_pixmap(
     stage: "DebugStage",
     source_image: Optional[np.ndarray] = None,
     overlay_alpha: float = 0.0,
+    line_thickness: int = 2,
+    show_roi1: bool = False,
+    show_roi3: bool = False,
 ) -> QPixmap:
     """Render a DebugStage as QPixmap, optionally blended with the source."""
     if stage.image is not None:
@@ -177,7 +256,60 @@ def _stage_to_pixmap(
         return _ndarray_to_pixmap(img)
 
     if stage.signal is not None:
-        return _signal_pixmap(stage.signal, stage.z_axis_px, stage.poi_z_px)
+        if source_image is not None:
+            src = source_image
+            if src.ndim == 2:
+                src = cv2.cvtColor(src, cv2.COLOR_GRAY2BGR)
+            else:
+                src = src.copy()   # don't mutate caller's array when drawing ROI
+            src_h, src_w = src.shape[:2]
+
+            # Scale source to a sensible display height (cap at 700 px tall).
+            _MAX_H = 700
+            scale = 1.0
+            if src_h > _MAX_H:
+                scale = _MAX_H / src_h
+                src = cv2.resize(src, (max(1, int(src_w * scale)), _MAX_H))
+                src_h, src_w = src.shape[:2]
+
+            # Draw ROI polygon(s) onto the source portion before compositing.
+            bbox = stage.metadata.get("display_bbox")
+            if bbox is not None and (show_roi1 or show_roi3):
+                px0, py0 = float(bbox[0]), float(bbox[1])
+
+                def _xform(pts):
+                    return np.array(
+                        [[int(round((p[0] - px0) * scale)),
+                          int(round((p[1] - py0) * scale))] for p in pts],
+                        dtype=np.int32,
+                    )
+
+                if show_roi3:
+                    roi3_pts = stage.metadata.get("roi3_points")
+                    if roi3_pts:
+                        cv2.polylines(src, [_xform(roi3_pts)], True,
+                                      (0, 140, 255), 2, cv2.LINE_AA)
+                if show_roi1:
+                    roi1_pts = stage.metadata.get("roi1_points")
+                    if roi1_pts:
+                        cv2.polylines(src, [_xform(roi1_pts)], True,
+                                      (220, 220, 0), 1, cv2.LINE_AA)
+
+            # Chart width: ~25% of total composite, min 120 px, max 300 px.
+            # This keeps the chart narrower than the image so it doesn't dominate.
+            chart_w = max(120, min(300, src_w // 4))
+            chart_arr = _signal_pixmap_arr(stage.signal, stage.z_axis_px, stage.poi_z_px,
+                                           w=chart_w, h=src_h,
+                                           line_thickness=line_thickness)
+            sep = np.full((src_h, 2, 3), 55, dtype=np.uint8)
+            composite = np.concatenate([src, sep, chart_arr], axis=1)
+            return _ndarray_to_pixmap(composite)
+
+        # No source image — chart only, at default size
+        chart_arr = _signal_pixmap_arr(stage.signal, stage.z_axis_px, stage.poi_z_px,
+                                       w=_CHART_W, h=_CHART_H,
+                                       line_thickness=line_thickness)
+        return _ndarray_to_pixmap(chart_arr)
 
     pm = QPixmap(320, 220)
     pm.fill(QColor(30, 30, 30))
@@ -273,8 +405,11 @@ class ABCompareDialog(QDialog):
         self._stages_a: List["DebugStage"] = []
         self._stages_b: List["DebugStage"] = []
         self._source_image: Optional[np.ndarray] = None
+        self._contrast_image_a: Optional[np.ndarray] = None
+        self._contrast_image_b: Optional[np.ndarray] = None
         self._roi_bbox: Optional[tuple] = None
         self._worker = None
+        self._line_thickness: int = 2
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -511,6 +646,17 @@ class ABCompareDialog(QDialog):
         )
         self._chk_roi2.stateChanged.connect(self._render_current_stage)
         ctrl_row.addWidget(self._chk_roi2)
+
+        ctrl_row.addSpacing(16)
+        ctrl_row.addWidget(QLabel("Line:"))
+        self._line_spin = QSpinBox()
+        self._line_spin.setRange(1, 8)
+        self._line_spin.setValue(2)
+        self._line_spin.setFixedWidth(44)
+        self._line_spin.setToolTip("Signal chart line thickness (px)")
+        self._line_spin.valueChanged.connect(self._on_line_thickness_changed)
+        ctrl_row.addWidget(self._line_spin)
+
         right_layout.addLayout(ctrl_row)
 
         # Two image views side by side
@@ -554,6 +700,10 @@ class ABCompareDialog(QDialog):
 
         right_layout.addWidget(views_splitter, 1)
         splitter.addWidget(right)
+
+        # Link crosshairs: hovering over one view moves the cursor in the other
+        self._view_a.row_hovered.connect(self._view_b.set_crosshair_frac)
+        self._view_b.row_hovered.connect(self._view_a.set_crosshair_frac)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
@@ -726,6 +876,10 @@ class ABCompareDialog(QDialog):
         self._overlay_lbl.setText(f"{value}%")
         self._render_current_stage()
 
+    def _on_line_thickness_changed(self, value: int) -> None:
+        self._line_thickness = value
+        self._render_current_stage()
+
     def _schedule_run(self) -> None:
         """Restart the debounce timer; runs after _DEBOUNCE_MS of inactivity."""
         if self._image_paths:
@@ -778,12 +932,16 @@ class ABCompareDialog(QDialog):
         stages_a: List["DebugStage"],
         stages_b: List["DebugStage"],
         source_image: np.ndarray,
+        contrast_image_a: Optional[np.ndarray],
+        contrast_image_b: Optional[np.ndarray],
         roi_bbox: Optional[tuple],
     ) -> None:
-        self._stages_a     = stages_a
-        self._stages_b     = stages_b
-        self._source_image = source_image
-        self._roi_bbox     = roi_bbox
+        self._stages_a        = stages_a
+        self._stages_b        = stages_b
+        self._source_image    = source_image
+        self._contrast_image_a = contrast_image_a
+        self._contrast_image_b = contrast_image_b
+        self._roi_bbox        = roi_bbox
         self._status_lbl.setText("Done")
         self._run_btn.setEnabled(True)
         self._populate_stage_combo()
@@ -820,9 +978,9 @@ class ABCompareDialog(QDialog):
         idx = self._stage_combo.currentIndex()
         alpha = self._overlay_slider.value() / 100.0
 
-        def _crop_src_for_stage(stages):
-            """Crop the source image using that stage's own display_bbox."""
-            src = self._source_image
+        def _crop_src_for_stage(stages, src_override=None):
+            """Crop the given source image using that stage's display_bbox."""
+            src = src_override if src_override is not None else self._source_image
             if src is None:
                 return None
             bbox = None
@@ -844,11 +1002,36 @@ class ABCompareDialog(QDialog):
                 pm = QPixmap(320, 220)
                 pm.fill(QColor(30, 30, 30))
                 return pm
-            return _stage_to_pixmap(stages[idx], _crop_src_for_stage(stages), alpha)
+            stage = stages[idx]
+            if stage.signal is not None:
+                # For signal stages: show the contrast-adjusted image in the
+                # left strip if use_contrast produced one; otherwise raw source.
+                contrast_img = (self._contrast_image_a if label == "A"
+                                else self._contrast_image_b)
+                src = _crop_src_for_stage(stages, contrast_img)
+                # Signal stages handle ROI overlays inside _stage_to_pixmap so
+                # the polygon is restricted to the source-image portion of the
+                # composite.  _with_roi_overlays is bypassed for these.
+                return _stage_to_pixmap(
+                    stage, src, alpha,
+                    line_thickness=self._line_thickness,
+                    show_roi1=self._chk_roi1.isChecked(),
+                    show_roi3=self._chk_roi2.isChecked(),
+                )
+            else:
+                # For image stages: overlay always uses the raw original.
+                src = _crop_src_for_stage(stages)
+            return _stage_to_pixmap(stage, src, alpha,
+                                    line_thickness=self._line_thickness)
 
         def _with_roi_overlays(stages, pm: QPixmap) -> QPixmap:
             stage = stages[idx] if stages and 0 <= idx < len(stages) else None
             if stage is None:
+                return pm
+            # Signal stages already have their ROI polygon drawn inside
+            # _stage_to_pixmap (restricted to the source-image portion of
+            # the composite); skip the QPainter pass here.
+            if stage.signal is not None:
                 return pm
             roi1_pts = stage.metadata.get("roi1_points")
             roi3_pts = stage.metadata.get("roi3_points")

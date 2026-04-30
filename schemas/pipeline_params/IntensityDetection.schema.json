@@ -72,6 +72,13 @@
       "default": 5,
       "description": "Minimum pixel distance between adjacent candidates."
     },
+    "roi_expansion_px": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 200,
+      "default": 0,
+      "description": "Expand the calibrated ROI polygon (ROI1) outward by this many pixels on every side before computing the per-row intensity signal. The resulting expanded polygon is shown as ROI3 in the A/B Comparison and Stage Detail dialogs. 0 = use the calibrated ROI exactly as drawn."
+    },
 
     "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
     "use_contrast": {
