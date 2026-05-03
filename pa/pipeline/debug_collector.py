@@ -87,15 +87,16 @@ def collect_intensity_stages(
     roi: Optional[tuple] = None,
     roi_points: Optional[List[tuple]] = None,
     image_size: Optional[tuple] = None,
+    mode_name: str = "IntensityDetection",
 ) -> List[DebugStage]:
     stages = []
     blur_p = {"method": params.get("blur_method", "gaussian"),
                "kernel_size": params.get("blur_kernel", 5)}
-    s = collect_blur_stage(pipette_index, "IntensityDetection", cache, blur_p, None)
+    s = collect_blur_stage(pipette_index, mode_name, cache, blur_p, None)
     if s:
         stages.append(s)
     if params.get("use_ab", True):
-        s2 = collect_ab_stage(pipette_index, "IntensityDetection", cache)
+        s2 = collect_ab_stage(pipette_index, mode_name, cache)
         if s2:
             stages.insert(0, s2)
 
@@ -105,7 +106,7 @@ def collect_intensity_stages(
     expansion = int(params.get("roi_expansion_px", 0) or 0)
     expanded_points: Optional[List[tuple]] = None
     expanded_bbox: Optional[tuple] = None
-    if expansion > 0 and roi_points and image_size is not None:
+    if expansion != 0 and roi_points and image_size is not None:
         img_h, img_w = image_size[0], image_size[1]
         expanded_points = ip_module.expand_roi_points(
             roi_points, expansion, img_h, img_w,
@@ -132,13 +133,15 @@ def collect_intensity_stages(
     if expanded_points:
         meta["roi3_points"] = [list(p) for p in expanded_points]
     stages.append(DebugStage(
-        name="Intensity Signal",
-        mode_name="IntensityDetection",
+        name="Intensity Signal" if mode_name == "IntensityDetection" else "Row Contrast Signal",
+        mode_name=mode_name,
         pipette_index=pipette_index,
         signal=profile.signal,
         z_axis_px=profile.z_axis_px,
         poi_z_px=poi_z,
-        description="Per-row mean intensity (normalised). Peaks = candidate transitions.",
+        description="Per-row mean intensity (normalised). Peaks = candidate transitions."
+                    if mode_name == "IntensityDetection" else
+                    "Per-row cross-sectional std (normalised). Peaks = high-contrast transitions.",
         metadata=meta,
     ))
     return stages

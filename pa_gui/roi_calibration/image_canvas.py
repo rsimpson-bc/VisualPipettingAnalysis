@@ -107,14 +107,73 @@ class PointHandle(QGraphicsObject):
         super().hoverLeaveEvent(event)
 
 
+class PairCenterHandle(QGraphicsObject):
+    """
+    A draggable diamond handle at the midpoint of a pair.
+    Dragging it moves both left and right vertices of that pair together.
+    Visible only in Move mode.
+    """
+    position_delta = Signal(float, float)  # (dx, dy) incremental step per move event
+
+    def __init__(self, pair_idx: int, pos: QPointF, radius: float = _HANDLE_R) -> None:
+        super().__init__()
+        self.pair_idx = pair_idx
+        self._r = radius
+        self.setPos(pos)
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setAcceptHoverEvents(True)
+        self.setZValue(12.0)   # above vertex handles (z=10)
+        self.setToolTip(f"Pair {pair_idx} \u2014 drag to move entire row")
+
+    def boundingRect(self) -> QRectF:
+        r = self._r * 1.5
+        return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        r = self._r * 1.2
+        diamond = QPolygonF([
+            QPointF(0,  -r),
+            QPointF( r,  0),
+            QPointF(0,   r),
+            QPointF(-r,  0),
+        ])
+        painter.setBrush(QBrush(QColor(255, 255, 160, 220)))
+        painter.setPen(QPen(QColor(100, 80, 0), 1.2))
+        painter.drawPolygon(diamond)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            # value = proposed new position; self.pos() = current (old) position
+            dx = value.x() - self.pos().x()
+            dy = value.y() - self.pos().y()
+            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                self.position_delta.emit(dx, dy)
+        return super().itemChange(change, value)
+
+    def hoverEnterEvent(self, event) -> None:
+        self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        self.unsetCursor()
+        super().hoverLeaveEvent(event)
+
+
 # ── Main canvas ────────────────────────────────────────────────────────────────
 
 class ImageCanvas(QGraphicsView):
     """Zoomable image canvas with interactive ROI polygon overlay."""
 
-    pair_added   = Signal(int, object)   # (pair_index, AbsolutePair)
-    pair_moved   = Signal(int, object)   # (pair_index, AbsolutePair)
-    pair_deleted = Signal(int)           # pair_index
+    pair_added        = Signal(int, object)   # (pair_index, AbsolutePair)
+    pair_moved        = Signal(int, object)   # (pair_index, AbsolutePair)
+    pair_deleted      = Signal(int)           # pair_index
+    mouse_image_pos   = Signal(float, float)  # (image_x, image_y) while hovering
+    mouse_left        = Signal()              # mouse left the canvas area
+    other_tip_offset_changed = Signal(int, float, float)  # (array_idx, dx, dy)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -142,6 +201,16 @@ class ImageCanvas(QGraphicsView):
 
         # Middle-mouse pan
         self._pan_origin: Optional[QPointF] = None  # in viewport coords
+
+        # Move-mode whole-polygon drag
+        self._move_mode: bool = False
+        self._poly_drag_origin: Optional[QPointF] = None
+        self._poly_drag_pairs_snapshot: List[AbsolutePair] = []
+
+        # Per-tip overlay drag (move mode)
+        self._other_tip_item_map: dict = {}          # id(item) → array_index
+        self._other_tip_drag_idx: Optional[int] = None
+        self._other_tip_drag_origin: Optional[QPointF] = None
 
         # ── View settings ─────────────────────────────────────────────────────
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -193,12 +262,36 @@ class ImageCanvas(QGraphicsView):
         self._rebuild_anchor()
 
     def set_draw_mode(self, enabled: bool) -> None:
+        if enabled:
+            # Disengage move mode when entering draw mode
+            self._move_mode = False
+            self._poly_drag_origin = None
         self._draw_mode = enabled
         self.setDragMode(QGraphicsView.DragMode.NoDrag)   # always NoDrag; pan = middle
         cursor = Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor
         self.viewport().setCursor(QCursor(cursor))
         if not enabled:
             self._cancel_pending()
+        self._rebuild_overlay()  # refresh center-handle visibility
+
+    def set_move_mode(self, enabled: bool) -> None:
+        """Toggle move mode: drag polygon body to reposition all pairs."""
+        if enabled:
+            # Disengage draw mode when entering move mode
+            self._draw_mode = False
+            self._cancel_pending()
+        self._move_mode = enabled
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        cursor = Qt.CursorShape.SizeAllCursor if enabled else Qt.CursorShape.ArrowCursor
+        self.viewport().setCursor(QCursor(cursor))
+        if not enabled:
+            self._poly_drag_origin = None
+            self._poly_drag_pairs_snapshot = []
+        self._rebuild_overlay()  # show/hide center handles
+
+    def leaveEvent(self, event) -> None:
+        self.mouse_left.emit()
+        super().leaveEvent(event)
 
     def delete_pair(self, pair_idx: int) -> None:
         if 0 <= pair_idx < len(self._pairs):
@@ -220,6 +313,31 @@ class ImageCanvas(QGraphicsView):
             event.accept()
             return
 
+        if event.button() == Qt.MouseButton.LeftButton and self._move_mode:
+            item = self.itemAt(event.pos())
+            if isinstance(item, (PointHandle, PairCenterHandle)):
+                # Individual handle drag (vertex or whole-pair center)
+                super().mousePressEvent(event)
+                return
+            # Check if the click landed on the active polygon body
+            if item is not None and item in self._poly_items:
+                self._poly_drag_origin = self.mapToScene(event.pos())
+                self._poly_drag_pairs_snapshot = [
+                    AbsolutePair(p.left_x, p.left_y, p.right_x, p.right_y)
+                    for p in self._pairs
+                ]
+                self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+                event.accept()
+                return
+
+            # Check other-tip overlay drag
+            if item is not None and id(item) in self._other_tip_item_map:
+                self._other_tip_drag_idx = self._other_tip_item_map[id(item)]
+                self._other_tip_drag_origin = self.mapToScene(event.pos())
+                self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+                event.accept()
+                return
+
         if self._draw_mode and event.button() == Qt.MouseButton.LeftButton:
             # If clicking on an existing handle, let it drag
             item = self.itemAt(event.pos())
@@ -233,7 +351,7 @@ class ImageCanvas(QGraphicsView):
         if event.button() == Qt.MouseButton.RightButton:
             # Context menu on handles
             item = self.itemAt(event.pos())
-            if isinstance(item, PointHandle):
+            if isinstance(item, (PointHandle, PairCenterHandle)):
                 self._show_handle_menu(item, event.globalPosition().toPoint())
                 event.accept()
                 return
@@ -241,6 +359,12 @@ class ImageCanvas(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        # Emit image-pixel coordinates for position display (always)
+        if self._image_item is not None:
+            sp = self.mapToScene(event.pos())
+            if self._scene.sceneRect().contains(sp):
+                self.mouse_image_pos.emit(sp.x(), sp.y())
+
         # Middle-mouse pan
         if self._pan_origin is not None:
             delta = event.position() - self._pan_origin
@@ -249,6 +373,32 @@ class ImageCanvas(QGraphicsView):
                 self.horizontalScrollBar().value() - int(delta.x()))
             self.verticalScrollBar().setValue(
                 self.verticalScrollBar().value() - int(delta.y()))
+            event.accept()
+            return
+
+        # Whole-polygon drag
+        if self._poly_drag_origin is not None and self._poly_drag_pairs_snapshot:
+            sp = self.mapToScene(event.pos())
+            dx = sp.x() - self._poly_drag_origin.x()
+            dy = sp.y() - self._poly_drag_origin.y()
+            for pair, orig in zip(self._pairs, self._poly_drag_pairs_snapshot):
+                pair.left_x  = orig.left_x  + dx
+                pair.left_y  = orig.left_y  + dy
+                pair.right_x = orig.right_x + dx
+                pair.right_y = orig.right_y + dy
+            self._rebuild_overlay()
+            for i, pair in enumerate(self._pairs):
+                self.pair_moved.emit(i, pair)
+            event.accept()
+            return
+
+        # Other-tip overlay drag (move mode)
+        if self._other_tip_drag_idx is not None and self._other_tip_drag_origin is not None:
+            sp = self.mapToScene(event.pos())
+            dx = sp.x() - self._other_tip_drag_origin.x()
+            dy = sp.y() - self._other_tip_drag_origin.y()
+            if self._other_tip_drag_idx < len(self._other_tip_items):
+                self._other_tip_items[self._other_tip_drag_idx].setPos(QPointF(dx, dy))
             event.accept()
             return
 
@@ -265,9 +415,33 @@ class ImageCanvas(QGraphicsView):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = None
-            cursor = (Qt.CursorShape.CrossCursor if self._draw_mode
-                      else Qt.CursorShape.ArrowCursor)
+            if self._draw_mode:
+                cursor = Qt.CursorShape.CrossCursor
+            elif self._move_mode:
+                cursor = Qt.CursorShape.SizeAllCursor
+            else:
+                cursor = Qt.CursorShape.ArrowCursor
             self.viewport().setCursor(QCursor(cursor))
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._poly_drag_origin is not None:
+            self._poly_drag_origin = None
+            self._poly_drag_pairs_snapshot = []
+            self.viewport().setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._other_tip_drag_idx is not None:
+            sp = self.mapToScene(event.pos())
+            dx = sp.x() - self._other_tip_drag_origin.x()
+            dy = sp.y() - self._other_tip_drag_origin.y()
+            # Reset visual translation — overlay refresh will reposition correctly
+            if self._other_tip_drag_idx < len(self._other_tip_items):
+                self._other_tip_items[self._other_tip_drag_idx].setPos(QPointF(0, 0))
+            tip_idx = self._other_tip_drag_idx
+            self._other_tip_drag_idx = None
+            self._other_tip_drag_origin = None
+            self.viewport().setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            self.other_tip_offset_changed.emit(tip_idx, dx, dy)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -329,7 +503,7 @@ class ImageCanvas(QGraphicsView):
 
     # ── Context menu ───────────────────────────────────────────────────────────
 
-    def _show_handle_menu(self, handle: PointHandle, global_pos) -> None:
+    def _show_handle_menu(self, handle, global_pos) -> None:
         menu = QMenu(self)
         action = menu.addAction(f"Delete pair {handle.pair_idx}")
         chosen = menu.exec(global_pos)
@@ -362,19 +536,33 @@ class ImageCanvas(QGraphicsView):
                     self._scene.addItem(h)
                     self._handles.append(h)
 
+                if self._move_mode:
+                    cx = (pair.left_x + pair.right_x) / 2.0
+                    cy = (pair.left_y + pair.right_y) / 2.0
+                    ch = PairCenterHandle(i, QPointF(cx, cy))
+                    ch.position_delta.connect(
+                        lambda dx, dy, i=i: self._on_center_handle_moved(i, dx, dy))
+                    self._scene.addItem(ch)
+                    self._handles.append(ch)
+
         self._rebuild_anchor()
 
     def _rebuild_other_overlays(self) -> None:
+        # Cancel any in-progress other-tip drag
+        self._other_tip_drag_idx = None
+        self._other_tip_drag_origin = None
         for it in self._other_tip_items:
             self._scene.removeItem(it)
         self._other_tip_items.clear()
+        self._other_tip_item_map.clear()
         if not self._show_other_tips:
             return
-        for tip_pairs in self._other_tip_pairs:
+        for arr_idx, tip_pairs in enumerate(self._other_tip_pairs):
             item = _make_polygon_item(
                 self._scene, tip_pairs, _C_OTHER_E, _C_OTHER_F, z=0.5)
             if item:
                 self._other_tip_items.append(item)
+                self._other_tip_item_map[id(item)] = arr_idx
 
     def _rebuild_anchor(self) -> None:
         if self._anchor_item is not None:
@@ -417,6 +605,35 @@ class ImageCanvas(QGraphicsView):
             pair.left_x,  pair.left_y  = pos.x(), pos.y()
         else:
             pair.right_x, pair.right_y = pos.x(), pos.y()
+        # Keep the center handle for this pair in sync
+        for h in self._handles:
+            if isinstance(h, PairCenterHandle) and h.pair_idx == idx:
+                h.blockSignals(True)
+                h.setPos(QPointF(
+                    (pair.left_x + pair.right_x) / 2.0,
+                    (pair.left_y + pair.right_y) / 2.0,
+                ))
+                h.blockSignals(False)
+                break
+        self._redraw_polygon_only()
+        self.pair_moved.emit(idx, pair)
+
+    def _on_center_handle_moved(self, idx: int, dx: float, dy: float) -> None:
+        """Move both vertices of a pair by the drag delta."""
+        if idx >= len(self._pairs):
+            return
+        pair = self._pairs[idx]
+        pair.left_x  += dx;  pair.left_y  += dy
+        pair.right_x += dx;  pair.right_y += dy
+        # Keep the corresponding vertex handles in sync without re-triggering
+        for h in self._handles:
+            if isinstance(h, PointHandle) and h.pair_idx == idx:
+                h.blockSignals(True)
+                if h.side == "left":
+                    h.setPos(QPointF(pair.left_x, pair.left_y))
+                else:
+                    h.setPos(QPointF(pair.right_x, pair.right_y))
+                h.blockSignals(False)
         self._redraw_polygon_only()
         self.pair_moved.emit(idx, pair)
 

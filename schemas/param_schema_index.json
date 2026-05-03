@@ -2,6 +2,7 @@
   "_comment": "Maps mode_name / integrator_type → relative path of its JSON Schema. Used by the param editor to discover and load schemas at runtime.",
   "modes": {
     "IntensityDetection":          "pipeline_params/IntensityDetection.schema.json",
+    "RowContrastDetection":         "pipeline_params/RowContrastDetection.schema.json",
     "LineContinuity_Terminations": "pipeline_params/LineContinuity_Terminations.schema.json",
     "LineContinuity_PatternChange":"pipeline_params/LineContinuity_PatternChange.schema.json",
     "LineContinuity_Correlation":  "pipeline_params/LineContinuity_Correlation.schema.json",

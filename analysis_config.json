@@ -141,6 +141,39 @@
             "peak_threshold": 0.1,
             "min_distance": 5
           }
+        },
+        {
+          "mode_name": "RowContrastDetection",
+          "enabled": false,
+          "weight": 0.2,
+          "params": {
+            "stat": "variance_v",
+            "vertical_window_px": 2,
+            "variance_cap": 0.0,
+            "peak_min_distance": 5,
+            "peak_min_prominence": 5.0,
+            "peak_width_exponent": 0.5,
+            "blur_method": "none",
+            "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
+            "use_ab": false,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "intensity_threshold": 0.3,
+            "min_distance": 5,
+            "roi_expansion_px": 0,
+            "use_contrast": false,
+            "contrast_mode": "absolute",
+            "contrast_blur_method": "gaussian",
+            "contrast_blur_kernel": 5,
+            "contrast_bilateral_d": 9,
+            "contrast_bilateral_sigma_color": 75.0,
+            "contrast_bilateral_sigma_space": 75.0,
+            "contrast_min": 0.0,
+            "contrast_max": 100.0
+          }
         }
       ],
       "integrator_params": {
@@ -159,11 +192,53 @@
           "params": {
             "blur_method": "gaussian",
             "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
             "use_ab": true,
             "gradient_method": "none",
             "gradient_ksize": 3,
             "intensity_threshold": 0.3,
-            "min_distance": 5
+            "min_distance": 5,
+            "roi_expansion_px": 0,
+            "use_contrast": true,
+            "contrast_mode": "absolute",
+            "contrast_blur_method": "gaussian",
+            "contrast_blur_kernel": 5,
+            "contrast_bilateral_d": 9,
+            "contrast_bilateral_sigma_color": 75.0,
+            "contrast_bilateral_sigma_space": 75.0,
+            "contrast_min": 0.0,
+            "contrast_max": 100.0
+          }
+        },
+        {
+          "mode_name": "RowContrastDetection",
+          "enabled": false,
+          "weight": 0.5,
+          "params": {
+            "stat": "std",
+            "vertical_window_px": 5,
+            "blur_method": "gaussian",
+            "blur_kernel": 5,
+            "bilateral_d": 9,
+            "bilateral_sigma_color": 75.0,
+            "bilateral_sigma_space": 75.0,
+            "use_ab": false,
+            "gradient_method": "none",
+            "gradient_ksize": 3,
+            "intensity_threshold": 0.3,
+            "min_distance": 5,
+            "roi_expansion_px": 0,
+            "use_contrast": false,
+            "contrast_mode": "absolute",
+            "contrast_blur_method": "gaussian",
+            "contrast_blur_kernel": 5,
+            "contrast_bilateral_d": 9,
+            "contrast_bilateral_sigma_color": 75.0,
+            "contrast_bilateral_sigma_space": 75.0,
+            "contrast_min": 0.0,
+            "contrast_max": 100.0
           }
         }
       ],

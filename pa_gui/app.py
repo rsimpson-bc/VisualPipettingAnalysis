@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMainWindow, QTabWidget
 from pa_gui.camera_calibration.calibration_tab import CalibrationTab
 from pa_gui.roi_calibration.calibration_panel import CalibrationPanel
 from pa_gui.analysis.analysis_tab import AnalysisTab
+from pa_gui.sweep.sweep_tab import SweepTab
 
 
 class MainWindow(QMainWindow):
@@ -30,4 +31,7 @@ class MainWindow(QMainWindow):
         self._analysis_tab = AnalysisTab(instrument_config_path)
         self._tabs.addTab(self._analysis_tab, "Run Analysis")
 
-        # Future tabs (Live View, Optimization) will be added here.
+        self._sweep_tab = SweepTab(instrument_config_path)
+        self._tabs.addTab(self._sweep_tab, "Parameter Sweep")
+
+        # Future tabs (Live View) will be added here.

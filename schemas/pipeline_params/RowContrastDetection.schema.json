@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "RowContrastDetection.schema.json",
+  "title": "RowContrastDetection mode params",
+  "description": "Per-row cross-sectional std/variance signal. Highlights rows with large pixel variation across the ROI width — characteristic of a liquid meniscus or tip-edge transition. Complementary to IntensityDetection (mean-based).",
+  "type": "object",
+  "properties": {
+    "_group_signal": { "type": "string", "const": "--- Signal ---" },
+    "stat": {
+      "type": "string",
+      "enum": ["std", "variance", "std_v", "variance_v", "peak_count_h", "peak_prominence_sum_h"],
+      "default": "std",
+      "description": "Which per-row statistic to compute.\n\n'std' (default) \u2014 standard deviation of pixel values within each row (horizontal). High where a scanline contains many alternating bright/dark patches.\n\n'variance' \u2014 squared std within each row (horizontal). Same as 'std' but amplifies large deviations more.\n\n'std_v' \u2014 local sliding-window std of the per-row mean along the z-axis (vertical). High where mean intensity changes rapidly between adjacent rows \u2014 a vertical edge detector.\n\n'variance_v' \u2014 squared version of std_v (vertical).\n\n'peak_count_h' \u2014 number of significant peaks in each row's intensity profile, normalised by row width^exponent. Counts only peaks meeting the minimum distance and prominence thresholds. Distinguishes rows with many distinct features from flat rows.\n\n'peak_prominence_sum_h' \u2014 sum of peak prominences in each row, normalised by row width^exponent. Rewards rows with large-amplitude oscillations (tall peaks) over rows that are merely noisy (many tiny bumps)."
+    },
+    "vertical_window_px": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 50,
+      "default": 5,
+      "description": "Window size (in rows) for the vertical sliding-window std computation. Only used when stat = 'std_v' or 'variance_v'. Larger values smooth out single-row noise at the cost of vertical resolution."
+    },
+    "variance_cap": {
+      "type": "number",
+      "minimum": 0.0,
+      "default": 0.0,
+      "description": "Maximum value to clamp the output signal when stat = 'variance' or 'variance_v'. 0 = disabled. Setting a cap prevents a single bright or edge artefact from dominating the signal scale and compressing all other features toward zero. Useful when the region of interest has an unavoidable high-variance spot (e.g. a reflection at one end of the ROI)."
+    },
+
+    "_group_peaks": { "type": "string", "const": "--- Peak Analysis (peak_count_h / peak_prominence_sum_h) ---" },
+    "peak_min_distance": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 5,
+      "description": "Minimum horizontal separation in pixels between two counted peaks in the same row. Prevents a broad peak from being counted multiple times. Only used when stat = 'peak_count_h' or 'peak_prominence_sum_h'."
+    },
+    "peak_min_prominence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 5.0,
+      "description": "Minimum prominence (0\u2013255 raw intensity units) for a local maximum to count as a peak. Prominence = how much you must descend from the peak before reaching a taller neighbour. Setting this above the noise floor filters out \"rocky but flat\" rows while keeping rows with genuine large swings. Only used when stat = 'peak_count_h' or 'peak_prominence_sum_h'."
+    },
+    "peak_width_exponent": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 2.0,
+      "default": 0.5,
+      "description": "Width-normalisation exponent. The raw count (or prominence sum) is divided by row_width^exponent to correct for wider rows having more opportunity for more peaks. 0 = no normalisation, 0.5 = square-root dampening (recommended), 1.0 = fully per-pixel. Only used when stat = 'peak_count_h' or 'peak_prominence_sum_h'."
+    },
+
+    "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },
+    "blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied before computing per-row std. Smoothing reduces sensitivity to single-pixel noise spikes."
+    },
+    "blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Kernel size for Gaussian blur (must be odd). Only used when blur_method = 'gaussian'."
+    },
+    "bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in color space. Only used when blur_method = 'bilateral'."
+    },
+    "bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
+    },
+    "use_ab": {
+      "type": "boolean",
+      "default": false,
+      "description": "True = compute std of the accumulated A:B frame difference; False = single frame. A:B mode highlights rows that change between frames rather than rows that are always bright."
+    },
+
+    "_group_gradient": { "type": "string", "const": "--- Gradient pre-processing ---" },
+    "gradient_method": {
+      "type": "string",
+      "enum": ["none", "xy", "x", "y"],
+      "default": "none",
+      "description": "Optional Sobel gradient applied after blur before computing std. 'none' = disabled. 'y' (vertical gradient) is usually most useful for detecting horizontal transitions."
+    },
+    "gradient_ksize": {
+      "type": "integer",
+      "minimum": 3,
+      "maximum": 7,
+      "default": 3,
+      "description": "Sobel kernel size. Use 3, 5, or 7 (odd values only)."
+    },
+
+    "intensity_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.3,
+      "description": "Normalised contrast minimum to count a row as a candidate (0–1). Applied after the signal is normalised to [0, 1]."
+    },
+    "min_distance": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "Minimum pixel distance between adjacent candidates."
+    },
+    "roi_expansion_px": {
+      "type": "integer",
+      "minimum": -200,
+      "maximum": 200,
+      "default": 0,
+      "description": "Expand (positive) or contract (negative) the calibrated ROI polygon outward by this many pixels before computing the signal. Negative values shave off the outer edges — useful for excluding tip-wall artefacts. 0 = use calibrated ROI exactly."
+    },
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, subtract a blurred reference frame from the sample before all other processing. Useful for isolating changes due to liquid presence."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' — output = |sample − reference|.\n'relative' — signed difference centred at grey (127)."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to sample and reference before differencing."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for contrast pre-blur."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for contrast pre-blur."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0–255). Differences below this are suppressed."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0–255). Differences at or above this are saturated."
+    }
+  },
+  "additionalProperties": false
+}

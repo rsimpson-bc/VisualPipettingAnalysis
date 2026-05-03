@@ -10,6 +10,7 @@ No function here imports from any other pa.pipeline module.
 
 from __future__ import annotations
 
+import functools
 import math
 import cv2
 import numpy as np
@@ -310,6 +311,30 @@ def extract_roi(img: np.ndarray, roi: Tuple[int, int, int, int]) -> np.ndarray:
     """
     x, y, w, h = roi
     return img[y: y + h, x: x + w]
+
+
+@functools.lru_cache(maxsize=64)
+def roi_polygon_mask(
+    roi_points_key: tuple,   # tuple of (int_x, int_y) — pre-rounded polygon vertices
+    bbox_x: int,
+    bbox_y: int,
+    bbox_w: int,
+    bbox_h: int,
+) -> np.ndarray:
+    """Return a bool mask of shape (bbox_h, bbox_w), True = inside polygon.
+
+    All arguments are hashable so ``lru_cache`` works across calls.
+    Polygon vertices should be pre-rounded to integers for a stable key.
+    Cached for the process lifetime; a sweep over many images sharing the
+    same polygon pays the rasterisation cost only once.
+    """
+    mask = np.zeros((bbox_h, bbox_w), dtype=np.uint8)
+    pts = np.array(
+        [(x - bbox_x, y - bbox_y) for x, y in roi_points_key],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(mask, [pts], 1)
+    return mask.astype(bool)
 
 
 def expand_roi_points(

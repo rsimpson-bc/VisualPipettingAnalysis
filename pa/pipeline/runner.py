@@ -34,6 +34,7 @@ def _register_modes():
         return  # already registered
 
     from pa.pipeline.modes.intensity_detection import IntensityDetection
+    from pa.pipeline.modes.row_contrast_detection import RowContrastDetection
     from pa.pipeline.modes.line_continuity import (
         LineContinuityTerminations,
         LineContinuityPatternChange,
@@ -48,6 +49,7 @@ def _register_modes():
 
     _LIQUID_MODES.update({
         "IntensityDetection":           IntensityDetection,
+        "RowContrastDetection":          RowContrastDetection,
         "LineContinuity_Terminations":  LineContinuityTerminations,
         "LineContinuity_PatternChange": LineContinuityPatternChange,
         "LineContinuity_Correlation":   LineContinuityCorrelation,
@@ -74,6 +76,7 @@ def _register_interpreters():
 
     from pa.pipeline.interpreters.liquid_interpreters import (
         IntensityInterpreter,
+        RowContrastInterpreter,
         LineContinuityThresholdInterpreter,
         LineContinuityCorrelationInterpreter,
         ExtremaLinesDensityInterpreter,
@@ -83,6 +86,7 @@ def _register_interpreters():
 
     _LIQUID_INTERPRETERS.update({
         "IntensityDetection":              IntensityInterpreter,
+        "RowContrastDetection":            RowContrastInterpreter,
         "LineContinuity_Terminations":     LineContinuityThresholdInterpreter,
         "LineContinuity_PatternChange":    LineContinuityThresholdInterpreter,
         "LineContinuity_Correlation":      LineContinuityCorrelationInterpreter,
@@ -176,13 +180,14 @@ def run_liquid_pipeline(
                 from pa.pipeline.debug_collector import (
                     collect_intensity_stages, collect_ridge_stages,
                 )
-                if mode_cfg.mode_name == "IntensityDetection":
+                if mode_cfg.mode_name in ("IntensityDetection", "RowContrastDetection"):
                     for stage in collect_intensity_stages(
                         image_set.pipette_index, profile, pois, cache, mode_cfg.params,
                         roi=image_set.roi,
                         roi_points=image_set.roi_points,
                         image_size=(image_set.frames[0].shape[0],
                                     image_set.frames[0].shape[1]) if image_set.frames else None,
+                        mode_name=mode_cfg.mode_name,
                     ):
                         debug_data.add(stage)
                 elif mode_cfg.mode_name.startswith("LineContinuity"):

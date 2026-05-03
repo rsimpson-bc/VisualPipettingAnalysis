@@ -35,11 +35,14 @@ def save_rois(
     roi_map: Dict[str, List[AbsolutePair]],   # {tip_type: [AbsolutePair, ...]}
     mandrels: List[dict],
     ref_tip_idx: int,
+    tip_offsets: Optional[Dict[str, Dict[int, tuple]]] = None,
 ) -> None:
     """
     Convert absolute pairs to relative RoiDefinitions and write them into
     the instrument_config file.  Existing keys not in roi_map are left intact.
     Tip types with empty pair lists are removed from camera_rois.
+    Per-tip correction offsets are stored under "tip_corrections" in each
+    tip-type entry when non-zero.
     """
     ref = _get_mandrel(mandrels, ref_tip_idx)
     if ref is None:
@@ -64,7 +67,17 @@ def save_rois(
             ref_tip_y_px=ref_y,
             ref_tip_z_px=ref_z,
         )
-        camera_rois[tip_type] = roi_def.to_dict()
+        roi_dict = roi_def.to_dict()
+        # Persist non-zero per-tip corrections
+        if tip_offsets and tip_offsets.get(tip_type):
+            corrections = {
+                str(k): [v[0], v[1]]
+                for k, v in tip_offsets[tip_type].items()
+                if abs(v[0]) > 1e-9 or abs(v[1]) > 1e-9
+            }
+            if corrections:
+                roi_dict["tip_corrections"] = corrections
+        camera_rois[tip_type] = roi_dict
 
     config["camera_rois"] = camera_rois
     with open(path, "w", encoding="utf-8") as f:
@@ -75,30 +88,32 @@ def load_rois(
     instrument_config_path: str,
     mandrels: List[dict],
     ref_tip_idx: int,
-) -> Dict[str, List[AbsolutePair]]:
+) -> tuple[Dict[str, List[AbsolutePair]], Dict[str, Dict[int, tuple]]]:
     """
     Read ROI definitions from instrument_config and convert them to absolute
     coordinates for the given reference tip.
 
-    Returns {tip_type: [AbsolutePair, ...]} for every entry in TIP_TYPES
-    (empty list for types not yet defined).
+    Returns (roi_map, tip_corrections) where:
+      roi_map          = {tip_type: [AbsolutePair, ...]} for every TIP_TYPE
+      tip_corrections  = {tip_type: {mandrel_index: (dx, dy)}} for stored corrections
     """
     result: Dict[str, List[AbsolutePair]] = {t: [] for t in TIP_TYPES}
+    tip_corrections: Dict[str, Dict[int, tuple]] = {t: {} for t in TIP_TYPES}
 
     path = Path(instrument_config_path)
     if not path.exists():
-        return result
+        return result, tip_corrections
 
     with open(path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
     camera_rois: dict = config.get("camera_rois", {})
     if not camera_rois:
-        return result
+        return result, tip_corrections
 
     ref = _get_mandrel(mandrels, ref_tip_idx)
     if ref is None:
-        return result
+        return result, tip_corrections
     ref_y, ref_z = _mandrel_yz(ref)
 
     for tip_type in TIP_TYPES:
@@ -106,8 +121,13 @@ def load_rois(
         if roi_dict is not None:
             roi_def = RoiDefinition.from_dict(roi_dict)
             result[tip_type] = roi_def.to_absolute_pairs(ref_y, ref_z)
+            for k, v in roi_dict.get("tip_corrections", {}).items():
+                try:
+                    tip_corrections[tip_type][int(k)] = (float(v[0]), float(v[1]))
+                except (ValueError, IndexError, TypeError):
+                    pass
 
-    return result
+    return result, tip_corrections
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

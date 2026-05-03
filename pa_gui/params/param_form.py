@@ -30,7 +30,7 @@ the reference.  For each changed row the row-label turns gold and a small
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -42,11 +42,72 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
+
+
+class _CollapsibleSection(QWidget):
+    """A labelled section that can be expanded/collapsed by clicking its header."""
+
+    def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header button
+        self._btn = QPushButton()
+        self._btn.setCheckable(True)
+        self._btn.setChecked(True)   # expanded by default
+        self._btn.setFlat(True)
+        self._btn.setStyleSheet(
+            "QPushButton { text-align:left; padding:3px 4px;"
+            " font-weight:bold; color:#aaa;"
+            " border:none; border-bottom:1px solid #555; }"
+            "QPushButton:hover { color:#ccc; }"
+        )
+        self._btn.clicked.connect(self._on_toggle)
+        self._set_title(title)
+        layout.addWidget(self._btn)
+
+        # Body: holds the QFormLayout
+        self._body = QWidget()
+        self._body.setContentsMargins(8, 2, 0, 2)
+        self._form = QFormLayout(self._body)
+        self._form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+        self._form.setContentsMargins(0, 2, 0, 2)
+        self._form.setSpacing(3)
+        layout.addWidget(self._body)
+
+    @property
+    def form(self) -> QFormLayout:
+        return self._form
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._btn.setChecked(expanded)
+        self._body.setVisible(expanded)
+        self._set_title(self._title)
+
+    def is_expanded(self) -> bool:
+        return self._btn.isChecked()
+
+    def _set_title(self, title: str) -> None:
+        self._title = title
+        arrow = "▼" if self._btn.isChecked() else "▶"
+        self._btn.setText(f" {arrow}  {title}")
+
+    def _on_toggle(self, checked: bool) -> None:
+        self._body.setVisible(checked)
+        self._set_title(self._title)
+
 
 
 class ParamFormWidget(QWidget):
@@ -84,21 +145,34 @@ class ParamFormWidget(QWidget):
         self._ref_labels: Dict[str, QLabel] = {}  # param_name → "A:val" annotation
         self._reference_params = reference_params
         self._show_weight = show_weight
+        self._sections: List[_CollapsibleSection] = []
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         inner = QWidget()
-        self._form = QFormLayout(inner)
-        self._form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self._form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        self._form.setContentsMargins(4, 4, 4, 4)
-        self._form.setSpacing(4)
+        self._root_layout = QVBoxLayout(inner)
+        self._root_layout.setContentsMargins(4, 4, 4, 4)
+        self._root_layout.setSpacing(2)
+
+        # Top-level form layout for weight + any params before first group
+        self._top_form = QFormLayout()
+        self._top_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._top_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+        self._top_form.setContentsMargins(0, 0, 0, 0)
+        self._top_form.setSpacing(3)
+        self._root_layout.addLayout(self._top_form)
+
+        # _form points to the *active* QFormLayout (top-level or current section)
+        self._form = self._top_form
+
+        self._root_layout.addStretch(1)
 
         scroll.setWidget(inner)
 
-        from PySide6.QtWidgets import QVBoxLayout
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(scroll)
@@ -114,12 +188,10 @@ class ParamFormWidget(QWidget):
     def _build_form(self, params: Dict[str, Any], weight: float) -> None:
         if self._show_weight:
             self._add_weight_row(weight)
-            self._add_separator()
 
         props: Dict[str, Any] = self._schema.get("properties", {})
         for key, prop in props.items():
             if key.startswith("_group_"):
-                # Group separator
                 self._add_section_header(prop.get("const", key[7:]))
                 continue
             self._add_param_row(key, prop, params.get(key, prop.get("default")))
@@ -138,15 +210,15 @@ class ParamFormWidget(QWidget):
         self._form.addRow(lbl, sb)
 
     def _add_section_header(self, title: str) -> None:
-        # Strip leading dashes and spaces
         text = title.strip("- ").strip()
-        sep = QLabel(f"<b style='color:#666'>{text}</b>")
-        sep.setContentsMargins(0, 6, 0, 2)
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("color: #888;")
-        self._form.addRow(line)
-        self._form.addRow(sep)
+        # Remove the stretch added in __init__ temporarily, insert section, re-add stretch
+        # (stretch is always last; sections are inserted before it)
+        stretch_item = self._root_layout.takeAt(self._root_layout.count() - 1)
+        section = _CollapsibleSection(text, self)
+        self._root_layout.addWidget(section)
+        self._root_layout.addItem(stretch_item)
+        self._sections.append(section)
+        self._form = section.form  # subsequent params go into this section's form
 
     def _add_separator(self) -> None:
         line = QFrame()

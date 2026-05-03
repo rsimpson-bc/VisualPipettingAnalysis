@@ -1,8 +1,14 @@
 """
-Layer 2 — Intensity Detection mode (liquid).
+Layer 2 — Row Contrast Detection mode (liquid).
 
-Uses accumulated A:B frame differences to build a per-row intensity signal.
-High-intensity rows indicate regions of change (liquid presence/transitions).
+Computes a per-row standard deviation (or variance) signal within the ROI.
+Rows with high cross-sectional contrast — such as a liquid meniscus or tip
+edge transition — produce a strong peak in the signal.
+
+This is complementary to IntensityDetection (which uses per-row *mean*):
+- IntensityDetection highlights rows that are globally bright/dark.
+- RowContrastDetection highlights rows where there is a sharp local gradient
+  across the width, even when absolute brightness is unremarkable.
 """
 
 from __future__ import annotations
@@ -11,7 +17,7 @@ import numpy as np
 from pa.pipeline.types import ImageSet, ZProfile, RawFeatures
 from pa.pipeline.cache import ProcessedImageCache
 from pa.pipeline.modes.base import BaseLiquidMode
-from pa.pipeline.extractors.intensity import IntensityExtractor
+from pa.pipeline.extractors.row_contrast import RowContrastExtractor
 from pa.pipeline import image_primitives as ip
 
 
@@ -31,14 +37,7 @@ def _apply_contrast(image_set: ImageSet, params: dict) -> ImageSet:
 
 
 def _apply_roi_expansion(image_set: ImageSet, params: dict) -> ImageSet:
-    """Return a new ImageSet whose roi/roi_points are expanded outward by
-    ``roi_expansion_px``.  Original points stay in roi_points only when no
-    expansion is configured; otherwise the expanded polygon replaces them
-    so the extractor analyses the wider region.
-
-    If no expansion is requested, or if roi_points is missing, the input
-    image_set is returned unchanged.
-    """
+    """Expand the ROI polygon outward by ``roi_expansion_px``."""
     expansion = int(params.get("roi_expansion_px", 0) or 0)
     if expansion == 0 or not image_set.roi_points or not image_set.frames:
         return image_set
@@ -47,7 +46,6 @@ def _apply_roi_expansion(image_set: ImageSet, params: dict) -> ImageSet:
     expanded_pts = ip.expand_roi_points(
         image_set.roi_points, expansion, img_h, img_w,
     )
-    # Derive the bounding box of the expanded polygon, clamped to the image.
     xs = [p[0] for p in expanded_pts]
     ys = [p[1] for p in expanded_pts]
     x0 = max(0, int(min(xs)))
@@ -67,36 +65,30 @@ def _apply_roi_expansion(image_set: ImageSet, params: dict) -> ImageSet:
     )
 
 
-class IntensityDetection(BaseLiquidMode):
-    """
-    Params (passed to IntensityExtractor + local):
-        blur_method (str):       default "gaussian"
-        blur_kernel (int):       default 5
-        use_ab (bool):           default True
-        roi_expansion_px (int):  default 0 — when > 0, ROI1 is expanded
-                                 outward by this many pixels on every side
-                                 (ROI3) and the per-row signal is computed
-                                 over the expanded region.
-    """
+class RowContrastDetection(BaseLiquidMode):
+    """Liquid detection using per-row cross-sectional std/variance."""
 
     def run(self, image_set: ImageSet, cache: ProcessedImageCache) -> ZProfile:
         prepared = _apply_roi_expansion(
             _apply_contrast(image_set, self.params), self.params
         )
-        features = IntensityExtractor(self.params).extract(prepared, cache)
+        features = RowContrastExtractor(self.params).extract(prepared, cache)
         return ZProfile(
-            mode="IntensityDetection",
+            mode="RowContrastDetection",
             pipette_index=image_set.pipette_index,
             z_axis_px=features.z_axis_px,
             signal=features.intensity_signal,
         )
 
-    def run_debug(self, image_set, cache):
+    def run_debug(self, image_set: ImageSet, cache: ProcessedImageCache):
         prepared = _apply_roi_expansion(
             _apply_contrast(image_set, self.params), self.params
         )
-        features = IntensityExtractor(self.params).extract(prepared, cache)
-        profile = ZProfile(mode="IntensityDetection",
-                           pipette_index=image_set.pipette_index,
-                           z_axis_px=features.z_axis_px, signal=features.intensity_signal)
+        features = RowContrastExtractor(self.params).extract(prepared, cache)
+        profile = ZProfile(
+            mode="RowContrastDetection",
+            pipette_index=image_set.pipette_index,
+            z_axis_px=features.z_axis_px,
+            signal=features.intensity_signal,
+        )
         return profile, features

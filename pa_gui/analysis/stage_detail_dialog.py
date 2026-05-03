@@ -194,6 +194,8 @@ class _SignalChart(QWidget):
         self._mode_name: str = ""
         self._crosshair_row: Optional[float] = None   # z_px value to highlight
         self._line_thickness: int = 2
+        self._log_scale: bool = False
+        self._show_poi: bool = True
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(120, 200)
         self.setMouseTracking(True)
@@ -219,6 +221,16 @@ class _SignalChart(QWidget):
 
     def set_line_thickness(self, thickness: int) -> None:
         self._line_thickness = max(1, thickness)
+        self.update()
+
+    def set_log_scale(self, enabled: bool) -> None:
+        """Toggle logarithmic scaling on the signal (x) axis."""
+        self._log_scale = enabled
+        self.update()
+
+    def set_show_poi(self, enabled: bool) -> None:
+        """Toggle visibility of the peak/POI horizontal marker lines."""
+        self._show_poi = enabled
         self.update()
 
     # ── Events ────────────────────────────────────────────────────────
@@ -278,6 +290,22 @@ class _SignalChart(QWidget):
         if z_max == z_min:
             z_max = z_min + 1.0
 
+        # Compute log-domain extremes once (used for ticks and signal mapping).
+        # log1p(x) = log(1+x) — safe for x=0 and gives 0 for zero signal.
+        if self._log_scale:
+            log_mn = float(np.log1p(max(0.0, mn)))
+            log_mx = float(np.log1p(max(0.0, mx)))
+            if log_mx == log_mn:
+                log_mx = log_mn + 1.0
+
+        def _sig_to_x(v: float) -> int:
+            """Map a signal value to a chart x-pixel position."""
+            if self._log_scale:
+                frac = (np.log1p(max(0.0, v)) - log_mn) / (log_mx - log_mn)
+            else:
+                frac = (v - mn) / (mx - mn)
+            return int(pad_l + frac * chart_w)
+
         font = QFont("", 7)
         painter.setFont(font)
 
@@ -300,22 +328,28 @@ class _SignalChart(QWidget):
         n_xticks = 4
         for ti in range(n_xticks + 1):
             frac = ti / n_xticks
-            v = mn + frac * (mx - mn)
+            if self._log_scale:
+                # Tick label = actual value corresponding to this log position
+                log_v = log_mn + frac * (log_mx - log_mn)
+                v_label = float(np.expm1(log_v))
+            else:
+                v_label = mn + frac * (mx - mn)
             x = int(pad_l + frac * chart_w)
             painter.setPen(QPen(QColor(160, 160, 160), 1))
             painter.drawText(x - 16, h - pad_b + 2, 32, pad_b - 2,
                              Qt.AlignmentFlag.AlignHCenter,
-                             f"{v:.2f}")
+                             f"{v_label:.2f}")
             painter.setPen(QPen(QColor(45, 45, 45), 1, Qt.PenStyle.DotLine))
             painter.drawLine(x, pad_t, x, pad_t + chart_h)
 
         # X-axis label
         painter.setPen(QPen(QColor(120, 120, 120), 1))
+        x_label = "Intensity (log\u2081\u208a)" if self._log_scale else "Intensity"
         painter.drawText(0, h - pad_b + 2, w, pad_b - 2,
-                         Qt.AlignmentFlag.AlignHCenter, "Intensity")
+                         Qt.AlignmentFlag.AlignHCenter, x_label)
 
         # Signal line  (horizontal: x = intensity, y = row)
-        pen = QPen(QColor(100, 220, 100), float(self._line_thickness))
+        pen = QPen(QColor(70, 130, 255), float(self._line_thickness))
         painter.setPen(pen)
         pts = []
         for i, v in enumerate(sig):
@@ -323,15 +357,15 @@ class _SignalChart(QWidget):
                 z = float(self._z_axis[i])
             else:
                 z = float(i)
-            x = int(pad_l + (v - mn) / (mx - mn) * chart_w)
+            x = _sig_to_x(float(v))
             y = int(pad_t + (z - z_min) / (z_max - z_min) * chart_h)
             pts.append(QPointF(x, y))
         for i in range(len(pts) - 1):
             painter.drawLine(pts[i], pts[i + 1])
 
         # POI horizontal lines (candidate transition rows)
-        if self._poi_z is not None:
-            poi_pen = QPen(QColor(0, 120, 255), 1, Qt.PenStyle.DashLine)
+        if self._show_poi and self._poi_z is not None:
+            poi_pen = QPen(QColor(50, 210, 80), float(self._line_thickness), Qt.PenStyle.DashLine)
             painter.setPen(poi_pen)
             for z in self._poi_z:
                 if z_max > z_min:
@@ -481,6 +515,21 @@ class StageDetailDialog(QDialog):
         self._line_spin.setToolTip("Signal line thickness (px)")
         self._line_spin.valueChanged.connect(lambda v: self._chart.set_line_thickness(v))
         nav.addWidget(self._line_spin)
+
+        self._log_btn = QPushButton("Log")
+        self._log_btn.setCheckable(True)
+        self._log_btn.setFixedWidth(44)
+        self._log_btn.setToolTip("Toggle logarithmic scale on the signal (x) axis")
+        self._log_btn.toggled.connect(self._chart.set_log_scale)
+        nav.addWidget(self._log_btn)
+
+        self._poi_btn = QPushButton("POI")
+        self._poi_btn.setCheckable(True)
+        self._poi_btn.setChecked(True)
+        self._poi_btn.setFixedWidth(44)
+        self._poi_btn.setToolTip("Toggle peak/POI marker lines on the signal chart")
+        self._poi_btn.toggled.connect(self._chart.set_show_poi)
+        nav.addWidget(self._poi_btn)
 
         root.addLayout(nav)
 

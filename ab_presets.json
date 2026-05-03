@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "20260502-105124-29839f",
+      "mode": "RowContrastDetection",
+      "description": "RCD_VV_1",
+      "created": "2026-05-02T10:51:24",
+      "params_b": {
+        "stat": "variance_v",
+        "vertical_window_px": 2,
+        "peak_min_distance": 5,
+        "peak_min_prominence": 5.0,
+        "peak_width_exponent": 0.5,
+        "blur_method": "none",
+        "blur_kernel": 5,
+        "bilateral_d": 9,
+        "bilateral_sigma_color": 75.0,
+        "bilateral_sigma_space": 75.0,
+        "use_ab": false,
+        "gradient_method": "none",
+        "gradient_ksize": 3,
+        "intensity_threshold": 0.3,
+        "min_distance": 5,
+        "roi_expansion_px": 0,
+        "use_contrast": false,
+        "contrast_mode": "absolute",
+        "contrast_blur_method": "gaussian",
+        "contrast_blur_kernel": 5,
+        "contrast_bilateral_d": 9,
+        "contrast_bilateral_sigma_color": 75.0,
+        "contrast_bilateral_sigma_space": 75.0,
+        "contrast_min": 0.0,
+        "contrast_max": 100.0
+      }
+    },
+    {
+      "id": "20260502-105137-cf2474",
+      "mode": "RowContrastDetection",
+      "description": "RCD_VV_2",
+      "created": "2026-05-02T10:51:37",
+      "params_b": {
+        "stat": "variance_v",
+        "vertical_window_px": 2,
+        "peak_min_distance": 5,
+        "peak_min_prominence": 5.0,
+        "peak_width_exponent": 0.5,
+        "blur_method": "none",
+        "blur_kernel": 5,
+        "bilateral_d": 9,
+        "bilateral_sigma_color": 75.0,
+        "bilateral_sigma_space": 75.0,
+        "use_ab": false,
+        "gradient_method": "none",
+        "gradient_ksize": 3,
+        "intensity_threshold": 0.3,
+        "min_distance": 5,
+        "roi_expansion_px": 0,
+        "use_contrast": false,
+        "contrast_mode": "absolute",
+        "contrast_blur_method": "gaussian",
+        "contrast_blur_kernel": 5,
+        "contrast_bilateral_d": 9,
+        "contrast_bilateral_sigma_color": 75.0,
+        "contrast_bilateral_sigma_space": 75.0,
+        "contrast_min": 0.0,
+        "contrast_max": 100.0
+      }
+    }
+  ]
+}

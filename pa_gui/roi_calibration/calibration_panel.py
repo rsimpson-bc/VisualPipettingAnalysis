@@ -72,6 +72,8 @@ class CalibrationPanel(QWidget):
         self._current_tip_type: str = TIP_TYPES[0]
         # One list of AbsolutePairs per tip type (edited in absolute image coords)
         self._roi_map: Dict[str, List[AbsolutePair]] = {t: [] for t in TIP_TYPES}
+        # Per-tip correction offsets: {tip_type: {mandrel_index: (dx, dy)}}
+        self._tip_offsets: Dict[str, Dict[int, tuple]] = {t: {} for t in TIP_TYPES}
 
         # ── Build UI ──────────────────────────────────────────────────────────
         root = QVBoxLayout(self)
@@ -93,6 +95,9 @@ class CalibrationPanel(QWidget):
         self._canvas.pair_added.connect(self._on_pair_added)
         self._canvas.pair_moved.connect(self._on_pair_moved)
         self._canvas.pair_deleted.connect(self._on_pair_deleted)
+        self._canvas.mouse_image_pos.connect(self._on_canvas_mouse_pos)
+        self._canvas.mouse_left.connect(lambda: self._coord_label.setText(""))
+        self._canvas.other_tip_offset_changed.connect(self._on_other_tip_offset_changed)
         self._editor.pair_changed.connect(self._on_editor_pair_changed)
         self._editor.pair_deleted.connect(self._on_editor_pair_deleted)
         self._editor.all_cleared.connect(self._on_editor_all_cleared)
@@ -177,6 +182,16 @@ class CalibrationPanel(QWidget):
         self._draw_btn.toggled.connect(self._on_draw_mode_toggled)
         tb.addWidget(self._draw_btn)
 
+        self._move_btn = QPushButton("↔  Move")
+        self._move_btn.setCheckable(True)
+        self._move_btn.setToolTip(
+            "Toggle move mode.\n"
+            "Drag the polygon body to reposition the entire ROI at once.\n"
+            "Drag individual handles to adjust single vertices.\n"
+            "Middle-drag or scroll to pan/zoom as usual.")
+        self._move_btn.toggled.connect(self._on_move_mode_toggled)
+        tb.addWidget(self._move_btn)
+
         btn_fit = QPushButton("Fit")
         btn_fit.clicked.connect(self._on_fit_view)
         tb.addWidget(btn_fit)
@@ -186,6 +201,14 @@ class CalibrationPanel(QWidget):
 
         self._canvas = ImageCanvas()
         layout.addWidget(self._canvas, stretch=1)
+
+        self._coord_label = QLabel("")
+        self._coord_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._coord_label.setStyleSheet(
+            "QLabel { color: #888; font-size: 10px; padding: 0px 4px; }")
+        layout.addWidget(self._coord_label)
+
         return container
 
     def _build_right_panel(self) -> QWidget:
@@ -254,11 +277,14 @@ class CalibrationPanel(QWidget):
             # Populate ref-tip combo with real mandrel indices if available
             self._refresh_ref_tip_combo()
             self._status_msg(f"Config loaded: {Path(path).name}")
-            # Load any saved ROIs
+            # Load any saved ROIs and per-tip corrections
             try:
-                loaded = roi_exporter.load_rois(path, self._mandrels,
-                                                self._ref_tip_idx)
+                loaded, corrections = roi_exporter.load_rois(
+                    path, self._mandrels, self._ref_tip_idx)
                 self._roi_map.update(loaded)
+                self._tip_offsets = {t: {} for t in TIP_TYPES}
+                for tip_type, corr in corrections.items():
+                    self._tip_offsets[tip_type].update(corr)
                 self._refresh_canvas()
                 self._refresh_all_overlays()
             except Exception as e:
@@ -304,7 +330,7 @@ class CalibrationPanel(QWidget):
         self._editor.set_pairs(pairs)
 
     def _refresh_all_overlays(self) -> None:
-        """Recompute the translated polygons for all other tips."""
+        """Recompute the translated polygons for all other tips, applying per-tip offsets."""
         if not self._show_others_cb.isChecked():
             self._canvas.set_other_tip_overlays([])
             return
@@ -318,9 +344,20 @@ class CalibrationPanel(QWidget):
         roi_def = RoiDefinition.from_absolute_pairs(
             self._current_tip_type, pairs, ref_y, ref_z)
 
+        offsets = self._tip_offsets.get(self._current_tip_type, {})
         overlays: List[List[AbsolutePair]] = []
-        for tip_y, tip_z in self._get_all_tip_yz():
-            overlays.append(roi_def.to_absolute_pairs(tip_y, tip_z))
+        for m in sorted(self._mandrels, key=lambda x: x.get("index", 0)):
+            tip_y = float(m.get("calibrated_pixel_yz", [0, 0])[0])
+            tip_z = float(m.get("calibrated_pixel_yz", [0, 0])[1])
+            tip_pairs = roi_def.to_absolute_pairs(tip_y, tip_z)
+            dx, dy = offsets.get(m.get("index", 0), (0.0, 0.0))
+            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                tip_pairs = [
+                    AbsolutePair(p.left_x + dx, p.left_y + dy,
+                                 p.right_x + dx, p.right_y + dy)
+                    for p in tip_pairs
+                ]
+            overlays.append(tip_pairs)
         self._canvas.set_other_tip_overlays(overlays)
 
     # ── Slots — canvas ─────────────────────────────────────────────────────────
@@ -365,9 +402,31 @@ class CalibrationPanel(QWidget):
 
     # ── Slots — toolbar / options ──────────────────────────────────────────────
 
+    def _on_other_tip_offset_changed(self, array_idx: int, dx: float, dy: float) -> None:
+        """Accumulate a drag offset for a specific tip overlay and refresh."""
+        sorted_mandrels = sorted(self._mandrels, key=lambda x: x.get("index", 0))
+        if array_idx >= len(sorted_mandrels):
+            return
+        mandrel_idx = sorted_mandrels[array_idx].get("index", array_idx)
+        offsets = self._tip_offsets[self._current_tip_type]
+        old_dx, old_dy = offsets.get(mandrel_idx, (0.0, 0.0))
+        offsets[mandrel_idx] = (old_dx + dx, old_dy + dy)
+        self._refresh_all_overlays()
+
     def _on_draw_mode_toggled(self, checked: bool) -> None:
+        if checked:
+            self._move_btn.setChecked(False)
         self._canvas.set_draw_mode(checked)
         self._draw_btn.setText("✏  Drawing…" if checked else "✏  Draw")
+
+    def _on_move_mode_toggled(self, checked: bool) -> None:
+        if checked:
+            self._draw_btn.setChecked(False)
+        self._canvas.set_move_mode(checked)
+        self._move_btn.setText("↔  Moving…" if checked else "↔  Move")
+
+    def _on_canvas_mouse_pos(self, x: float, y: float) -> None:
+        self._coord_label.setText(f"x={int(x)}  y={int(y)}")
 
     def _on_fit_view(self) -> None:
         self._canvas.fitInView(
@@ -429,8 +488,15 @@ class CalibrationPanel(QWidget):
 
     def _on_load_ic(self) -> None:
         path = self._ic_edit.text().strip()
-        if path:
-            self._load_ic_file(path)
+        if not path:
+            QMessageBox.information(
+                self, "Load Instrument Config",
+                "No instrument config path is set.\n"
+                "Click \"Browse\u2026\" to choose an instrument_config.json file, "
+                "then click Load."
+            )
+            return
+        self._load_ic_file(path)
 
     def _on_save_ic(self) -> None:
         path = self._ic_edit.text().strip()
@@ -452,7 +518,8 @@ class CalibrationPanel(QWidget):
         self._roi_map[self._current_tip_type] = self._canvas.get_pairs()
         try:
             roi_exporter.save_rois(
-                path, self._roi_map, self._mandrels, self._ref_tip_idx)
+                path, self._roi_map, self._mandrels, self._ref_tip_idx,
+                self._tip_offsets)
             self._status_msg(f"Saved → {path}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))

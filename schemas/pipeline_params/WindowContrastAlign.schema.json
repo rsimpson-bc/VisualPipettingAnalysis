@@ -8,9 +8,10 @@
     "_group_roi": { "type": "string", "const": "--- ROI ---" },
     "roi_expansion_px": {
       "type": "integer",
-      "minimum": 0,
+      "minimum": -200,
+      "maximum": 200,
       "default": 0,
-      "description": "Expand the calibrated ROI outward by this many pixels in every direction before scanning. Use this to search for tips that are slightly outside their expected position."
+      "description": "Expand (positive) or contract (negative) the calibrated ROI outward by this many pixels in every direction before scanning. Negative values shave the outer edges of the ROI."
     },
 
     "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },

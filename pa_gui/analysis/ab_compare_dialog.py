@@ -26,6 +26,7 @@ B images auto-update 800 ms after the last param change (debounced).
 from __future__ import annotations
 
 import copy
+import json
 import os
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -33,18 +34,20 @@ import cv2
 import numpy as np
 
 from PySide6.QtCore import Qt, QRectF, QSettings, QTimer, QPointF, Signal
+from PySide6.QtGui import QClipboard
 from PySide6.QtGui import (
     QColor, QImage, QPainter, QPen, QPolygonF, QPixmap, QFont,
 )
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QSlider, QSpinBox, QSplitter,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QGroupBox,
+    QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
     QVBoxLayout, QWidget,
 )
 
 from pa_gui.params.param_form import ParamFormWidget
+from pa_gui.analysis import ab_presets
 
 if TYPE_CHECKING:
     from pa.pipeline.types import DebugStage
@@ -180,6 +183,8 @@ def _signal_pixmap_arr(
     w: int = _CHART_W,
     h: int = _CHART_H,
     line_thickness: int = 2,
+    log_scale: bool = False,
+    show_poi: bool = True,
 ) -> np.ndarray:
     """Return a BGR numpy array (h, w, 3) of the horizontal signal chart."""
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
@@ -188,7 +193,16 @@ def _signal_pixmap_arr(
     mn, mx = float(signal.min()), float(signal.max())
     if mx == mn:
         return canvas
-    norm = (signal - mn) / (mx - mn)
+
+    if log_scale:
+        import numpy as _np
+        log_mn = float(_np.log1p(max(0.0, mn)))
+        log_mx = float(_np.log1p(max(0.0, mx)))
+        if log_mx == log_mn:
+            log_mx = log_mn + 1.0
+        norm = (_np.log1p(_np.maximum(0.0, signal.astype(float))) - log_mn) / (log_mx - log_mn)
+    else:
+        norm = (signal - mn) / (mx - mn)
     n = len(norm)
 
     if z_axis is not None and len(z_axis) >= 2:
@@ -197,6 +211,7 @@ def _signal_pixmap_arr(
         z_min, z_max = 0.0, float(n - 1)
 
     # Signal line: x = intensity (left→right), y = row (top→bottom)
+    # Color: blue BGR(255, 130, 70)
     pts = []
     for i, v in enumerate(norm):
         z = float(z_axis[i]) if z_axis is not None and i < len(z_axis) else float(i)
@@ -204,14 +219,15 @@ def _signal_pixmap_arr(
         y = int((z - z_min) / max(z_max - z_min, 1) * (h - 1))
         pts.append((x, y))
     for i in range(len(pts) - 1):
-        cv2.line(canvas, pts[i], pts[i + 1], (100, 220, 100), line_thickness)
+        cv2.line(canvas, pts[i], pts[i + 1], (255, 130, 70), line_thickness)
 
     # POI markers — horizontal lines
-    if poi_z is not None and z_axis is not None and len(z_axis) >= 2:
+    # Color: green BGR(50, 210, 50)
+    if show_poi and poi_z is not None and z_axis is not None and len(z_axis) >= 2:
         for z in poi_z:
             if z_max > z_min:
                 y = int((z - z_min) / (z_max - z_min) * (h - 1))
-                cv2.line(canvas, (0, y), (w - 1, y), (0, 90, 255), 2)
+                cv2.line(canvas, (0, y), (w - 1, y), (50, 210, 50), line_thickness)
 
     return canvas
 
@@ -234,6 +250,8 @@ def _stage_to_pixmap(
     line_thickness: int = 2,
     show_roi1: bool = False,
     show_roi3: bool = False,
+    log_scale: bool = False,
+    show_poi: bool = True,
 ) -> QPixmap:
     """Render a DebugStage as QPixmap, optionally blended with the source."""
     if stage.image is not None:
@@ -300,7 +318,9 @@ def _stage_to_pixmap(
             chart_w = max(120, min(300, src_w // 4))
             chart_arr = _signal_pixmap_arr(stage.signal, stage.z_axis_px, stage.poi_z_px,
                                            w=chart_w, h=src_h,
-                                           line_thickness=line_thickness)
+                                           line_thickness=line_thickness,
+                                           log_scale=log_scale,
+                                           show_poi=show_poi)
             sep = np.full((src_h, 2, 3), 55, dtype=np.uint8)
             composite = np.concatenate([src, sep, chart_arr], axis=1)
             return _ndarray_to_pixmap(composite)
@@ -308,7 +328,9 @@ def _stage_to_pixmap(
         # No source image — chart only, at default size
         chart_arr = _signal_pixmap_arr(stage.signal, stage.z_axis_px, stage.poi_z_px,
                                        w=_CHART_W, h=_CHART_H,
-                                       line_thickness=line_thickness)
+                                       line_thickness=line_thickness,
+                                       log_scale=log_scale,
+                                       show_poi=show_poi)
         return _ndarray_to_pixmap(chart_arr)
 
     pm = QPixmap(320, 220)
@@ -410,6 +432,10 @@ class ABCompareDialog(QDialog):
         self._roi_bbox: Optional[tuple] = None
         self._worker = None
         self._line_thickness: int = 2
+        self._log_scale: bool = False
+        self._show_poi: bool = True
+        self._multi_results: List[dict] = []
+        self._tip_row_widgets: List[tuple] = []  # (lbl_a, lbl_b) per pipette
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -421,6 +447,7 @@ class ABCompareDialog(QDialog):
 
         self._build_ui()
         self._restore_state()
+        self._refresh_preset_combo()
 
     # ── UI construction ──────────────────────────────────────────────────────
 
@@ -503,6 +530,20 @@ class ABCompareDialog(QDialog):
         )
         self._frame_combo.currentIndexChanged.connect(self._on_frame_changed)
         src_row.addWidget(self._frame_combo)
+
+        self._btn_prev = QPushButton("◀")
+        self._btn_prev.setFixedWidth(28)
+        self._btn_prev.setToolTip("Previous image file")
+        self._btn_prev.setEnabled(False)
+        self._btn_prev.clicked.connect(self._on_nav_prev)
+        src_row.addWidget(self._btn_prev)
+
+        self._btn_next = QPushButton("▶")
+        self._btn_next.setFixedWidth(28)
+        self._btn_next.setToolTip("Next image file")
+        self._btn_next.setEnabled(False)
+        self._btn_next.clicked.connect(self._on_nav_next)
+        src_row.addWidget(self._btn_next)
 
         src_row.addSpacing(8)
         src_row.addWidget(QLabel("Pipette idx:"))
@@ -593,6 +634,114 @@ class ABCompareDialog(QDialog):
         btn_row.addWidget(apply_btn)
         left_layout.addLayout(btn_row)
 
+        # ── Presets group ─────────────────────────────────────────────────
+        presets_box = QGroupBox("Presets")
+        presets_box.setStyleSheet(
+            "QGroupBox { font-weight:bold; margin-top:6px; }"
+            "QGroupBox::title { subcontrol-origin:margin; left:6px; padding:0 2px; }"
+        )
+        pb_layout = QVBoxLayout(presets_box)
+        pb_layout.setSpacing(4)
+        pb_layout.setContentsMargins(6, 10, 6, 6)
+
+        # File row
+        file_row = QHBoxLayout()
+        file_row.addWidget(QLabel("File:"))
+        self._preset_file_lbl = QLabel()
+        self._preset_file_lbl.setStyleSheet(
+            "background:#1a1a1a; padding:1px 4px; border:1px solid #444;"
+            "font-size:10px; color:#aaa;"
+        )
+        self._preset_file_lbl.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                             QSizePolicy.Policy.Fixed)
+        self._preset_file_lbl.setFixedHeight(20)
+        self._preset_file_lbl.setToolTip(ab_presets.get_presets_path())
+        self._preset_file_lbl.setText(
+            os.path.basename(ab_presets.get_presets_path())
+        )
+        file_row.addWidget(self._preset_file_lbl, 1)
+        change_file_btn = QPushButton("…")
+        change_file_btn.setFixedWidth(24)
+        change_file_btn.setToolTip("Choose a different presets file")
+        change_file_btn.clicked.connect(self._on_change_preset_file)
+        file_row.addWidget(change_file_btn)
+        pb_layout.addLayout(file_row)
+
+        # Separator
+        sep_p = QFrame()
+        sep_p.setFrameShape(QFrame.Shape.HLine)
+        sep_p.setStyleSheet("color:#333;")
+        pb_layout.addWidget(sep_p)
+
+        # Description label + text area
+        pb_layout.addWidget(QLabel("Description (explain why these settings work):"))
+        self._preset_desc = QPlainTextEdit()
+        self._preset_desc.setPlaceholderText(
+            "e.g. Wider ROI avoids glare on meniscus at 50 µL…"
+        )
+        self._preset_desc.setFixedHeight(58)  # ~3 lines
+        pb_layout.addWidget(self._preset_desc)
+
+        # Save + Copy row
+        save_copy_row = QHBoxLayout()
+        save_btn = QPushButton("Save Preset")
+        save_btn.setToolTip("Save current B parameters + description to the presets file.")
+        save_btn.clicked.connect(self._on_save_preset)
+        save_copy_row.addWidget(save_btn)
+        copy_btn = QPushButton("Copy JSON")
+        copy_btn.setToolTip(
+            "Copy the current B parameters and description as JSON to the clipboard."
+        )
+        copy_btn.clicked.connect(self._on_copy_preset_json)
+        save_copy_row.addWidget(copy_btn)
+        pb_layout.addLayout(save_copy_row)
+
+        # Separator
+        sep_p2 = QFrame()
+        sep_p2.setFrameShape(QFrame.Shape.HLine)
+        sep_p2.setStyleSheet("color:#333;")
+        pb_layout.addWidget(sep_p2)
+
+        # Load section
+        load_hdr_row = QHBoxLayout()
+        load_hdr_row.addWidget(QLabel("Load preset:"))
+        refresh_btn = QPushButton("↺")
+        refresh_btn.setFixedWidth(24)
+        refresh_btn.setToolTip("Reload the presets file")
+        refresh_btn.clicked.connect(self._refresh_preset_combo)
+        load_hdr_row.addWidget(refresh_btn)
+        pb_layout.addLayout(load_hdr_row)
+
+        self._preset_combo = QComboBox()
+        self._preset_combo.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                          QSizePolicy.Policy.Fixed)
+        self._preset_combo.setToolTip("Saved presets for this mode (newest first)")
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        pb_layout.addWidget(self._preset_combo)
+
+        self._preset_preview = QPlainTextEdit()
+        self._preset_preview.setReadOnly(True)
+        self._preset_preview.setFixedHeight(72)  # ~4 lines
+        self._preset_preview.setStyleSheet(
+            "background:#161616; color:#aaa; font-family:monospace; font-size:10px;"
+        )
+        self._preset_preview.setPlaceholderText("Select a preset above to preview it.")
+        pb_layout.addWidget(self._preset_preview)
+
+        self._load_preset_btn = QPushButton("Load into B")
+        self._load_preset_btn.setEnabled(False)
+        self._load_preset_btn.setToolTip(
+            "Apply the previewed preset's parameters to the B parameter form."
+        )
+        self._load_preset_btn.setStyleSheet(
+            "QPushButton { background:#4a3a00; color:#f5c542; font-weight:bold; }"
+            "QPushButton:disabled { background:#333; color:#666; }"
+        )
+        self._load_preset_btn.clicked.connect(self._on_load_preset)
+        pb_layout.addWidget(self._load_preset_btn)
+
+        left_layout.addWidget(presets_box)
+
         splitter.addWidget(left)
 
         # Right: controls + two views
@@ -657,6 +806,26 @@ class ABCompareDialog(QDialog):
         self._line_spin.valueChanged.connect(self._on_line_thickness_changed)
         ctrl_row.addWidget(self._line_spin)
 
+        self._log_chk = QCheckBox("Log")
+        self._log_chk.setToolTip("Display signal (x) axis on a logarithmic scale")
+        self._log_chk.stateChanged.connect(self._on_log_scale_changed)
+        ctrl_row.addWidget(self._log_chk)
+
+        self._all_tips_chk = QCheckBox("All tips")
+        self._all_tips_chk.setToolTip(
+            "Run and display all pipettes simultaneously.\n"
+            "Shows a compact signal chart grid (one row per tip).\n"
+            "The Pipette idx spinner is disabled in this mode."
+        )
+        self._all_tips_chk.stateChanged.connect(self._on_all_tips_toggled)
+        ctrl_row.addWidget(self._all_tips_chk)
+
+        self._poi_chk = QCheckBox("POI")
+        self._poi_chk.setChecked(True)
+        self._poi_chk.setToolTip("Toggle peak/POI marker lines on signal charts")
+        self._poi_chk.stateChanged.connect(self._on_show_poi_changed)
+        ctrl_row.addWidget(self._poi_chk)
+
         right_layout.addLayout(ctrl_row)
 
         # Two image views side by side
@@ -699,6 +868,23 @@ class ABCompareDialog(QDialog):
         views_splitter.addWidget(b_wrap)
 
         right_layout.addWidget(views_splitter, 1)
+
+        # ── All-tips scroll area (hidden by default) ───────────────────
+        self._all_tips_inner = QWidget()
+        self._all_tips_layout = QVBoxLayout(self._all_tips_inner)
+        self._all_tips_layout.setContentsMargins(4, 4, 4, 4)
+        self._all_tips_layout.setSpacing(2)
+        self._all_tips_layout.addStretch()
+
+        self._all_tips_scroll = QScrollArea()
+        self._all_tips_scroll.setWidget(self._all_tips_inner)
+        self._all_tips_scroll.setWidgetResizable(True)
+        self._all_tips_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._all_tips_scroll.setVisible(False)
+        right_layout.addWidget(self._all_tips_scroll, 1)
+
         splitter.addWidget(right)
 
         # Link crosshairs: hovering over one view moves the cursor in the other
@@ -846,8 +1032,26 @@ class ABCompareDialog(QDialog):
         for i, p in enumerate(self._image_paths):
             self._frame_combo.addItem(f"Frame {i}  ({os.path.basename(p)})")
         self._frame_combo.blockSignals(False)
+        self._update_nav_buttons()
+
+    def _update_nav_buttons(self) -> None:
+        n = len(self._image_paths)
+        idx = self._frame_combo.currentIndex()
+        self._btn_prev.setEnabled(n > 1 and idx > 0)
+        self._btn_next.setEnabled(n > 1 and idx < n - 1)
+
+    def _on_nav_prev(self) -> None:
+        idx = self._frame_combo.currentIndex()
+        if idx > 0:
+            self._frame_combo.setCurrentIndex(idx - 1)  # triggers _on_frame_changed
+
+    def _on_nav_next(self) -> None:
+        idx = self._frame_combo.currentIndex()
+        if idx < len(self._image_paths) - 1:
+            self._frame_combo.setCurrentIndex(idx + 1)  # triggers _on_frame_changed
 
     def _on_frame_changed(self, idx: int) -> None:
+        self._update_nav_buttons()
         if self._image_paths:
             self._schedule_run()
 
@@ -869,6 +1073,101 @@ class ABCompareDialog(QDialog):
         """Emit the current B params so the parent editor can apply them."""
         self.params_applied.emit(copy.deepcopy(self._params_b))
 
+    # ── Preset slots ───────────────────────────────────────────────────────
+
+    def _refresh_preset_combo(self) -> None:
+        """Reload the preset combo from the current presets file."""
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        self._preset_combo.addItem("— select a preset —", userData=None)
+        entries = ab_presets.presets_for_mode(self._mode_name)
+        for entry in entries:
+            self._preset_combo.addItem(
+                ab_presets.format_combo_label(entry), userData=entry
+            )
+        self._preset_combo.blockSignals(False)
+        self._preset_preview.clear()
+        self._load_preset_btn.setEnabled(False)
+
+    def _on_preset_selected(self, idx: int) -> None:
+        """Show a preview when a preset is chosen in the combo."""
+        entry = self._preset_combo.itemData(idx)
+        if entry is None:
+            self._preset_preview.clear()
+            self._load_preset_btn.setEnabled(False)
+        else:
+            self._preset_preview.setPlainText(ab_presets.format_preview(entry))
+            self._load_preset_btn.setEnabled(True)
+
+    def _on_load_preset(self) -> None:
+        """Load the currently previewed preset's params_b into the B form."""
+        idx = self._preset_combo.currentIndex()
+        entry = self._preset_combo.itemData(idx)
+        if entry is None:
+            return
+        params = entry.get("params_b", {})
+        desc = entry.get("description", "")
+        self._params_b = copy.deepcopy(params)
+        self._b_form.set_params(self._params_b)
+        # Pre-fill the description field with the loaded preset's description
+        self._preset_desc.setPlainText(desc)
+
+    def _on_save_preset(self) -> None:
+        """Append current B params + description to the presets file."""
+        desc = self._preset_desc.toPlainText().strip()
+        if not desc:
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "No description",
+                "Save preset without a description?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            ab_presets.add_preset(
+                mode=self._mode_name,
+                description=desc,
+                params_b=copy.deepcopy(self._b_form.get_params()),
+            )
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
+        self._refresh_preset_combo()
+        # Select the newly saved entry (index 1 = first real entry after placeholder)
+        if self._preset_combo.count() > 1:
+            self._preset_combo.setCurrentIndex(1)
+
+    def _on_copy_preset_json(self) -> None:
+        """Copy current B params + description as a JSON snippet to clipboard."""
+        payload = {
+            "mode": self._mode_name,
+            "description": self._preset_desc.toPlainText().strip(),
+            "params_b": copy.deepcopy(self._b_form.get_params()),
+        }
+        text = json.dumps(payload, indent=2, ensure_ascii=False)
+        QApplication.clipboard().setText(text)
+        # Brief visual feedback via the status label
+        self._status_lbl.setText("Copied to clipboard.")
+
+    def _on_change_preset_file(self) -> None:
+        """Let the user pick a different (or new) presets JSON file."""
+        current = ab_presets.get_presets_path()
+        choice, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select or create presets file",
+            current,
+            "JSON files (*.json);;All files (*)",
+            options=QFileDialog.Option.DontConfirmOverwrite,
+        )
+        if not choice:
+            return
+        ab_presets.set_presets_path(choice)
+        self._preset_file_lbl.setText(os.path.basename(choice))
+        self._preset_file_lbl.setToolTip(choice)
+        self._refresh_preset_combo()
+
     def _on_stage_changed(self, idx: int) -> None:
         self._render_current_stage()
 
@@ -879,6 +1178,22 @@ class ABCompareDialog(QDialog):
     def _on_line_thickness_changed(self, value: int) -> None:
         self._line_thickness = value
         self._render_current_stage()
+
+    def _on_log_scale_changed(self, state: int) -> None:
+        self._log_scale = bool(state)
+        self._render_current_stage()
+
+    def _on_show_poi_changed(self, state: int) -> None:
+        self._show_poi = bool(state)
+        self._render_current_stage()
+
+    def _on_all_tips_toggled(self, state: int) -> None:
+        """Switch between single-tip and all-tips display modes."""
+        enabled = bool(state)
+        self._pipette_spin.setEnabled(not enabled)
+        self._views_splitter.setVisible(not enabled)
+        self._all_tips_scroll.setVisible(enabled)
+        self._schedule_run()
 
     def _schedule_run(self) -> None:
         """Restart the debounce timer; runs after _DEBOUNCE_MS of inactivity."""
@@ -893,25 +1208,57 @@ class ABCompareDialog(QDialog):
         if self._worker and self._worker.isRunning():
             self._worker.requestInterruption()
 
-        frame_idx   = max(0, self._frame_combo.currentIndex())
-        pipette_idx = self._pipette_spin.value() - 1  # spin is 1-based; worker is 0-based
+        frame_idx = max(0, self._frame_combo.currentIndex())
 
-        from pa_gui.analysis.ab_compare_worker import ABCompareWorker
-        self._worker = ABCompareWorker(
-            mode_name=self._mode_name,
-            params_a=self._params_a,
-            params_b=self._params_b,
-            image_paths=self._image_paths,
-            reference_paths=self._reference_paths,
-            frame_index=frame_idx,
-            pipette_index=pipette_idx,
-            instrument_config_path=self._instrument_config_path,
-            tip_type=self._tip_edit.text().strip(),
-            parent=self,
-        )
-        self._worker.progress.connect(self._on_progress)
-        self._worker.result_ready.connect(self._on_result)
-        self._worker.error.connect(self._on_worker_error)
+        if self._all_tips_chk.isChecked():
+            # Derive pipette count from IC; fall back to 8.
+            import os, json
+            pipette_count = 8
+            if self._instrument_config_path and os.path.isfile(self._instrument_config_path):
+                try:
+                    with open(self._instrument_config_path, encoding="utf-8") as f:
+                        ic = json.load(f)
+                    entries = ic.get("calibrated_pixel_yz", [])
+                    if entries:
+                        pipette_count = len(entries)
+                except Exception:
+                    pass
+
+            from pa_gui.analysis.ab_compare_worker import ABMultiTipWorker
+            self._worker = ABMultiTipWorker(
+                mode_name=self._mode_name,
+                params_a=self._params_a,
+                params_b=self._params_b,
+                image_paths=self._image_paths,
+                reference_paths=self._reference_paths,
+                frame_index=frame_idx,
+                pipette_count=pipette_count,
+                instrument_config_path=self._instrument_config_path,
+                tip_type=self._tip_edit.text().strip(),
+                parent=self,
+            )
+            self._worker.progress.connect(self._on_progress)
+            self._worker.multi_result_ready.connect(self._on_multi_result)
+            self._worker.error.connect(self._on_worker_error)
+        else:
+            pipette_idx = self._pipette_spin.value() - 1
+            from pa_gui.analysis.ab_compare_worker import ABCompareWorker
+            self._worker = ABCompareWorker(
+                mode_name=self._mode_name,
+                params_a=self._params_a,
+                params_b=self._params_b,
+                image_paths=self._image_paths,
+                reference_paths=self._reference_paths,
+                frame_index=frame_idx,
+                pipette_index=pipette_idx,
+                instrument_config_path=self._instrument_config_path,
+                tip_type=self._tip_edit.text().strip(),
+                parent=self,
+            )
+            self._worker.progress.connect(self._on_progress)
+            self._worker.result_ready.connect(self._on_result)
+            self._worker.error.connect(self._on_worker_error)
+
         self._run_btn.setEnabled(False)
         self._status_lbl.setText("Running…")
         self._worker.start()
@@ -954,6 +1301,105 @@ class ABCompareDialog(QDialog):
 
     # ── Stage display ──────────────────────────────────────────────────────
 
+    def _rebuild_tip_rows(self, n: int) -> None:
+        """Recreate the all-tips scroll area to hold n tip rows."""
+        # Clear old content (remove all items except the trailing stretch)
+        while self._all_tips_layout.count():
+            item = self._all_tips_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._tip_row_widgets = []
+
+        _CHART_W_TIP = 260
+        _CHART_H_TIP = 130
+
+        for i in range(n):
+            row_widget = QWidget()
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(2, 2, 2, 2)
+            row.setSpacing(6)
+
+            lbl_tip = QLabel(f"Tip {i + 1}")
+            lbl_tip.setFixedWidth(52)
+            lbl_tip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lbl_tip.setStyleSheet("color:#aaa; font-size:10px;")
+            row.addWidget(lbl_tip)
+
+            lbl_a = QLabel()
+            lbl_a.setFixedSize(_CHART_W_TIP, _CHART_H_TIP)
+            lbl_a.setStyleSheet("background:#1a1a1a; border:1px solid #2a4a2a;")
+            row.addWidget(lbl_a)
+
+            sep = QLabel("|")
+            sep.setFixedWidth(8)
+            sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sep.setStyleSheet("color:#555;")
+            row.addWidget(sep)
+
+            lbl_b = QLabel()
+            lbl_b.setFixedSize(_CHART_W_TIP, _CHART_H_TIP)
+            lbl_b.setStyleSheet("background:#1a1a1a; border:1px solid #4a2a2a;")
+            row.addWidget(lbl_b)
+
+            row.addStretch()
+            self._tip_row_widgets.append((lbl_a, lbl_b))
+            self._all_tips_layout.addWidget(row_widget)
+
+            if i < n - 1:
+                sep_line = QFrame()
+                sep_line.setFrameShape(QFrame.Shape.HLine)
+                sep_line.setStyleSheet("color:#333;")
+                self._all_tips_layout.addWidget(sep_line)
+
+        self._all_tips_layout.addStretch()
+
+    def _render_all_tips(self) -> None:
+        """Render all tip rows from _multi_results for the current stage."""
+        if not self._multi_results or not self._tip_row_widgets:
+            return
+        idx = self._stage_combo.currentIndex()
+        _CHART_W_TIP = 260
+        _CHART_H_TIP = 130
+
+        blank = QPixmap(_CHART_W_TIP, _CHART_H_TIP)
+        blank.fill(QColor(26, 26, 26))
+
+        for result in self._multi_results:
+            i = result["pipette_index"]
+            if i >= len(self._tip_row_widgets):
+                continue
+            lbl_a, lbl_b = self._tip_row_widgets[i]
+
+            for lbl, stages in ((lbl_a, result["stages_a"]), (lbl_b, result["stages_b"])):
+                if stages and 0 <= idx < len(stages):
+                    stage = stages[idx]
+                    if stage.signal is not None:
+                        arr = _signal_pixmap_arr(
+                            stage.signal, stage.z_axis_px, stage.poi_z_px,
+                            w=_CHART_W_TIP, h=_CHART_H_TIP,
+                            line_thickness=self._line_thickness,
+                            log_scale=self._log_scale,
+                            show_poi=self._show_poi,
+                        )
+                        lbl.setPixmap(_ndarray_to_pixmap(arr))
+                    else:
+                        lbl.setPixmap(blank)
+                else:
+                    lbl.setPixmap(blank)
+
+    def _on_multi_result(self, results: list) -> None:
+        """Receive all-tips result from ABMultiTipWorker."""
+        self._multi_results = results
+        if results:
+            self._stages_a = results[0]["stages_a"]
+            self._stages_b = results[0]["stages_b"]
+        self._rebuild_tip_rows(len(results))
+        self._populate_stage_combo()   # uses _stages_a/_stages_b for names
+        self._render_all_tips()
+        self._status_lbl.setText(f"Done ({len(results)} tips)")
+        self._run_btn.setEnabled(True)
+
     def _populate_stage_combo(self) -> None:
         prev = self._stage_combo.currentIndex()
         self._stage_combo.blockSignals(True)
@@ -975,6 +1421,10 @@ class ABCompareDialog(QDialog):
         self._render_current_stage()
 
     def _render_current_stage(self) -> None:
+        if self._all_tips_chk.isChecked():
+            self._render_all_tips()
+            return
+
         idx = self._stage_combo.currentIndex()
         alpha = self._overlay_slider.value() / 100.0
 
@@ -1017,6 +1467,8 @@ class ABCompareDialog(QDialog):
                     line_thickness=self._line_thickness,
                     show_roi1=self._chk_roi1.isChecked(),
                     show_roi3=self._chk_roi2.isChecked(),
+                    log_scale=self._log_scale,
+                    show_poi=self._show_poi,
                 )
             else:
                 # For image stages: overlay always uses the raw original.

@@ -69,6 +69,29 @@ class IntensityInterpreter(BaseLiquidInterpreter):
         )
 
 
+class RowContrastInterpreter(BaseLiquidInterpreter):
+    """
+    Same threshold/peak-finding logic as IntensityInterpreter, applied to the
+    per-row std/variance signal produced by RowContrastDetection.
+
+    Params:
+        intensity_threshold (float): minimum normalised contrast to consider (0–1)
+        min_distance (int):          minimum px between POIs
+        mode_weight (float):         overall weight for this mode's POIs
+    """
+
+    def interpret(self, profile: ZProfile) -> List[PointOfInterest]:
+        params = self.params
+        signal = sp.normalize_signal(profile.signal)
+        threshold = params.get("intensity_threshold", 0.3)
+        min_dist = params.get("min_distance", 5)
+        weight = params.get("mode_weight", 1.0)
+        return _threshold_peaks(
+            signal, profile.z_axis_px, threshold, min_dist,
+            profile.mode, weight, label="contrast_peak",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Line Continuity interpreters  (shared logic, different signal semantics)
 # ---------------------------------------------------------------------------

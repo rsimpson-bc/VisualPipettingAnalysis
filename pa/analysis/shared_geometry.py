@@ -84,6 +84,16 @@ def lookup_roi(
         # No mandrel entry found for this pipette index
         return None, None
 
+    # Apply per-tip correction offset if present
+    corrections = roi_dict.get("tip_corrections", {})
+    correction = corrections.get(str(pipette_index)) or corrections.get(pipette_index)
+    if correction is not None:
+        try:
+            tip_y_px += float(correction[0])
+            tip_z_px += float(correction[1])
+        except (TypeError, IndexError):
+            pass
+
     # Convert the relative anchor+pairs definition to absolute polygon vertices
     roi_points = _camera_roi_to_roi_points(roi_dict, tip_y_px, tip_z_px)
     if not roi_points:

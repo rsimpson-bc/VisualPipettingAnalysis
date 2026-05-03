@@ -62,11 +62,33 @@ class IntensityExtractor(BaseExtractor):
         else:
             processed = blurred
 
-        # Step 4: extract ROI
+        # Step 4: extract ROI (bounding-box crop)
         roi_img = ip.extract_roi(processed, image_set.roi) if image_set.roi else processed
 
-        # Step 4: per-row mean intensity → 1-D signal
-        intensity_signal = roi_img.astype(np.float32).mean(axis=1)
+        # Step 4b: apply polygon mask so per-row mean uses only pixels inside
+        # the polygon — not the full bounding rectangle.
+        arr_f = roi_img.astype(np.float32)
+        if image_set.roi_points and image_set.roi:
+            roi_x = int(image_set.roi[0]); roi_y = int(image_set.roi[1])
+            roi_w = int(image_set.roi[2]); roi_h = int(image_set.roi[3])
+            pts_key = tuple(
+                (int(round(x)), int(round(y))) for x, y in image_set.roi_points
+            )
+            n_rows, n_cols = arr_f.shape[:2]
+            full_mask = ip.roi_polygon_mask(pts_key, roi_x, roi_y, roi_w, roi_h)
+            mh = min(full_mask.shape[0], n_rows)
+            mw = min(full_mask.shape[1], n_cols)
+            poly_mask = np.zeros((n_rows, n_cols), dtype=bool)
+            poly_mask[:mh, :mw] = full_mask[:mh, :mw]
+            intensity_signal = (
+                np.ma.array(arr_f, mask=~poly_mask)
+                .mean(axis=1)
+                .filled(0)
+                .astype(np.float32)
+            )
+        else:
+            intensity_signal = arr_f.mean(axis=1)
+
         z_axis = np.arange(len(intensity_signal))
 
         return RawFeatures(

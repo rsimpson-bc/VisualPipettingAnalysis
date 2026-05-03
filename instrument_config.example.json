@@ -25,14 +25,6 @@
   },
   "mandrels": [
     {
-      "index": 1,
-      "calibrated_pixel_yz": [
-        428.4,
-        312.1
-      ],
-      "angle_deg": 0.12
-    },
-    {
       "index": 2,
       "calibrated_pixel_yz": [
         528.7,
@@ -56,31 +48,53 @@
       ],
       "angle_deg": 0.11
     }
+    {
+      "index": 5,
+      "calibrated_pixel_yz": [
+        729.6,
+        312.0
+      ],
+      "angle_deg": 0.11
+    }
+    {
+      "index": 6,
+      "calibrated_pixel_yz": [
+        729.6,
+        312.0
+      ],
+      "angle_deg": 0.11
+    }
   ],
   "tip_rois": {
     "50uL": {
       "calibrated": [
         {
-          "pipette": 1,
+          "pipette": 2,
           "y_px": 430.2,
           "z_px": 588.1,
           "r_deg": 0.05
         },
         {
-          "pipette": 2,
+          "pipette": 3,
           "y_px": 530.5,
           "z_px": 587.8,
           "r_deg": 0.04
         },
         {
-          "pipette": 3,
+          "pipette": 4,
           "y_px": 630.9,
           "z_px": 588.3,
           "r_deg": 0.06
         },
         {
-          "pipette": 4,
+          "pipette": 5,
           "y_px": 731.2,
+          "z_px": 588.0,
+          "r_deg": 0.05
+        }
+        {
+          "pipette": 6,
+          "y_px": 831.2,
           "z_px": 588.0,
           "r_deg": 0.05
         }
@@ -89,26 +103,32 @@
     "300uL": {
       "calibrated": [
         {
-          "pipette": 1,
+          "pipette": 2,
           "y_px": 430.1,
           "z_px": 592.4,
           "r_deg": 0.05
         },
         {
-          "pipette": 2,
+          "pipette": 3,
           "y_px": 530.4,
           "z_px": 592.1,
           "r_deg": 0.04
         },
         {
-          "pipette": 3,
+          "pipette": 4,
           "y_px": 630.8,
           "z_px": 592.6,
           "r_deg": 0.06
         },
         {
-          "pipette": 4,
+          "pipette": 5,
           "y_px": 731.1,
+          "z_px": 592.3,
+          "r_deg": 0.05
+        }
+        {
+          "pipette": 6,
+          "y_px": 831.1,
           "z_px": 592.3,
           "r_deg": 0.05
         }
