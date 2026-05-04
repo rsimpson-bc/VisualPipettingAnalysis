@@ -160,6 +160,7 @@ class _ABWorkerBase(QThread):
                         image_size=(image_set.frames[0].shape[0],
                                     image_set.frames[0].shape[1]) if image_set.frames else None,
                         mode_name=self._mode_name,
+                        features=features,
                     ):
                         debug_data.add(stage)
                 elif self._mode_name.startswith("LineContinuity"):
@@ -167,6 +168,10 @@ class _ABWorkerBase(QThread):
                     for stage in collect_ridge_stages(
                         image_set.pipette_index, self._mode_name,
                         features, profile, pois, cache, params,
+                        roi=image_set.roi,
+                        roi_points=image_set.roi_points,
+                        image_size=(image_set.frames[0].shape[0],
+                                    image_set.frames[0].shape[1]) if image_set.frames else None,
                     ):
                         debug_data.add(stage)
 

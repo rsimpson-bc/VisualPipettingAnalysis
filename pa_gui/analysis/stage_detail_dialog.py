@@ -193,9 +193,11 @@ class _SignalChart(QWidget):
         self._poi_z: Optional[List[float]] = None
         self._mode_name: str = ""
         self._crosshair_row: Optional[float] = None   # z_px value to highlight
+        self._crosshair_value: Optional[float] = None  # interpolated signal value at crosshair
         self._line_thickness: int = 2
         self._log_scale: bool = False
         self._show_poi: bool = True
+        self._extra_signals: Optional[List[dict]] = None  # band signals for peak_count_bands_h
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(120, 200)
         self.setMouseTracking(True)
@@ -206,11 +208,13 @@ class _SignalChart(QWidget):
         z_axis: Optional[np.ndarray] = None,
         poi_z: Optional[List[float]] = None,
         mode_name: str = "",
+        extra_signals: Optional[List[dict]] = None,
     ):
         self._signal = signal
         self._z_axis = z_axis
         self._poi_z = poi_z
         self._mode_name = mode_name
+        self._extra_signals = extra_signals
         self._crosshair_row = None
         self.update()
 
@@ -239,12 +243,14 @@ class _SignalChart(QWidget):
         z_px = self._y_to_zpx(event.pos().y())
         if z_px is not None:
             self._crosshair_row = z_px
+            self._crosshair_value = self._zpx_to_value(z_px)
             self.row_hovered.emit(z_px)
             self.update()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         self._crosshair_row = None
+        self._crosshair_value = None
         self.row_hovered.emit(-1.0)
         self.update()
         super().leaveEvent(event)
@@ -277,6 +283,13 @@ class _SignalChart(QWidget):
 
         sig = self._signal
         mn, mx = float(sig.min()), float(sig.max())
+        # Extend range to include band signals so all lines share the same x-axis
+        if self._extra_signals:
+            for band in self._extra_signals:
+                bs = band.get("signal")
+                if bs is not None and len(bs) > 0:
+                    mn = min(mn, float(bs.min()))
+                    mx = max(mx, float(bs.max()))
         if mx == mn:
             mx = mn + 1.0
         n = len(sig)
@@ -289,6 +302,16 @@ class _SignalChart(QWidget):
             z_min, z_max = 0.0, float(n - 1)
         if z_max == z_min:
             z_max = z_min + 1.0
+
+        # ── Band distribution mode ─────────────────────────────────────────
+        if (self._extra_signals is not None
+                and len(self._extra_signals) > 0
+                and self._extra_signals[0].get("viz") == "band_distribution"):
+            self._paint_band_distribution(
+                painter, w, h, pad_l, pad_t, chart_w, chart_h, z_min, z_max,
+            )
+            return
+        # ──────────────────────────────────────────────────────────────────
 
         # Compute log-domain extremes once (used for ticks and signal mapping).
         # log1p(x) = log(1+x) — safe for x=0 and gives 0 for zero signal.
@@ -363,6 +386,52 @@ class _SignalChart(QWidget):
         for i in range(len(pts) - 1):
             painter.drawLine(pts[i], pts[i + 1])
 
+        # Extra band signal lines
+        if self._extra_signals:
+            band_pen_width = max(1.0, float(self._line_thickness) - 0.5)
+            for band in self._extra_signals:
+                bs = band.get("signal")
+                if bs is None or len(bs) < 2:
+                    continue
+                color_hex = band.get("color", "#888888")
+                band_color = QColor(color_hex)
+                band_pen = QPen(band_color, band_pen_width)
+                painter.setPen(band_pen)
+                bpts = []
+                for i, v in enumerate(bs):
+                    if self._z_axis is not None and i < len(self._z_axis):
+                        z = float(self._z_axis[i])
+                    else:
+                        z = float(i)
+                    x = _sig_to_x(float(v))
+                    y = int(pad_t + (z - z_min) / (z_max - z_min) * chart_h)
+                    bpts.append(QPointF(x, y))
+                for i in range(len(bpts) - 1):
+                    painter.drawLine(bpts[i], bpts[i + 1])
+
+            # Legend: band labels in top-right of chart
+            fm = painter.fontMetrics()
+            lh = fm.height() + 2
+            swatch = 10
+            gap = 4
+            legend_entries = []
+            # Total line first
+            legend_entries.append(("#4682ff", "total"))
+            for band in self._extra_signals:
+                legend_entries.append((band.get("color", "#888"), band.get("label", "")))
+            legend_w = max(fm.horizontalAdvance(lbl) + swatch + gap + 6 for _, lbl in legend_entries)
+            legend_h = lh * len(legend_entries) + 4
+            lx = pad_l + chart_w - legend_w - 4
+            ly = pad_t + 4
+            painter.fillRect(lx, ly, legend_w, legend_h, QColor(0, 0, 0, 180))
+            for ei, (col_hex, lbl) in enumerate(legend_entries):
+                ey = ly + 2 + ei * lh
+                painter.fillRect(lx + 3, ey + (lh - 6) // 2, swatch, 6, QColor(col_hex))
+                painter.setPen(QPen(QColor(200, 200, 200), 1))
+                painter.drawText(lx + 3 + swatch + gap, ey, legend_w - swatch - gap - 3, lh,
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 lbl)
+
         # POI horizontal lines (candidate transition rows)
         if self._show_poi and self._poi_z is not None:
             poi_pen = QPen(QColor(50, 210, 80), float(self._line_thickness), Qt.PenStyle.DashLine)
@@ -382,6 +451,24 @@ class _SignalChart(QWidget):
                 painter.setPen(ch_pen)
                 painter.drawLine(pad_l, y, pad_l + chart_w, y)
 
+                # Floating value label
+                if self._crosshair_value is not None:
+                    row_int = int(round(self._crosshair_row))
+                    val = self._crosshair_value
+                    label = f"Row {row_int}  ·  {val:.4g}"
+                    fm = painter.fontMetrics()
+                    lw = fm.horizontalAdvance(label) + 10
+                    lh = fm.height() + 6
+                    lx = pad_l + chart_w - lw - 4
+                    ly = y - lh - 3
+                    if ly < pad_t:
+                        ly = y + 4
+                    painter.fillRect(lx, ly, lw, lh, QColor(0, 0, 0, 200))
+                    painter.setPen(QPen(QColor(255, 200, 80), 1))
+                    painter.drawText(lx + 5, ly + 2, lw - 10, lh - 4,
+                                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                     label)
+
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _y_to_zpx(self, widget_y: int) -> Optional[float]:
@@ -400,6 +487,170 @@ class _SignalChart(QWidget):
         else:
             z_min, z_max = 0.0, float(n - 1)
         return z_min + frac * (z_max - z_min)
+
+    def _zpx_to_value(self, z_px: float) -> Optional[float]:
+        """Linearly interpolate the signal value at a given z-px position."""
+        if self._signal is None or len(self._signal) < 2:
+            return None
+        n = len(self._signal)
+        if self._z_axis is not None and len(self._z_axis) >= 2:
+            z_min, z_max = float(self._z_axis[0]), float(self._z_axis[-1])
+        else:
+            z_min, z_max = 0.0, float(n - 1)
+        if z_max == z_min:
+            return float(self._signal[0])
+        idx = (z_px - z_min) / (z_max - z_min) * (n - 1)
+        i0 = max(0, min(int(idx), n - 2))
+        frac = idx - i0
+        return float(self._signal[i0] * (1.0 - frac) + self._signal[i0 + 1] * frac)
+
+    def _paint_band_distribution(
+        self,
+        painter: QPainter,
+        w: int,
+        h: int,
+        pad_l: int,
+        pad_t: int,
+        chart_w: int,
+        chart_h: int,
+        z_min: float,
+        z_max: float,
+    ) -> None:
+        """Render peak_count_bands_h as a per-row horizontal color-distribution
+        strip instead of the normal signal line chart.
+
+        Each row becomes a horizontal bar whose left-to-right colour segments
+        are proportional to the fraction of peaks in each prominence band
+        (lowest band first).  A row with no peaks is rendered dark.
+        """
+        import cv2 as _cv2
+
+        sig = self._signal
+        n = len(sig)
+        font = QFont("", 7)
+        painter.setFont(font)
+
+        # ── Pre-compute legend width so the strip doesn't overlap it ──────
+        fm = painter.fontMetrics()
+        lh = fm.height() + 2
+        swatch = 10
+        gap = 4
+        legend_entries = [
+            (b.get("color", "#888"), b.get("label", ""))
+            for b in self._extra_signals  # type: ignore[union-attr]
+        ]
+        legend_col_w = (
+            max(fm.horizontalAdvance(lbl) for _, lbl in legend_entries)
+            if legend_entries else 0
+        )
+        legend_w = legend_col_w + swatch + gap + 10  # swatch + gap + padding
+        legend_gap = 6
+        # Strip only occupies the left portion of chart_w; legend sits to the right
+        strip_w = max(1, chart_w - legend_w - legend_gap)
+
+        # ── Build the colour strip as a numpy array (n_rows × strip_w, RGB) ──
+        # Parse band colours (RGB for QImage)
+        band_colors_rgb: list = []
+        for band in self._extra_signals:  # type: ignore[union-attr]
+            c = QColor(band.get("color", "#888888"))
+            band_colors_rgb.append((c.red(), c.green(), c.blue()))
+
+        strip = np.zeros((n, strip_w, 3), dtype=np.uint8)
+        for i in range(n):
+            x_pos = 0
+            for bi, band in enumerate(self._extra_signals):  # type: ignore[union-attr]
+                sig_arr = band.get("signal")
+                frac = float(sig_arr[i]) if (sig_arr is not None and i < len(sig_arr)) else 0.0
+                bw = int(frac * strip_w)
+                if bw > 0 and x_pos < strip_w:
+                    x_end = min(x_pos + bw, strip_w)
+                    strip[i, x_pos:x_end] = band_colors_rgb[bi]
+                x_pos = min(x_pos + bw, strip_w)
+
+        # Resize to chart pixel dimensions using nearest-neighbour
+        resized = _cv2.resize(strip, (strip_w, chart_h),
+                              interpolation=_cv2.INTER_NEAREST)
+        resized = np.ascontiguousarray(resized, dtype=np.uint8)
+        qimg = QImage(resized.data, strip_w, chart_h,
+                      resized.strides[0], QImage.Format.Format_RGB888)
+        painter.drawImage(pad_l, pad_t, qimg)
+
+        # ── Y-axis labels and grid (drawn on top of the image) ────────────
+        n_yticks = 5
+        for ti in range(n_yticks + 1):
+            frac = ti / n_yticks
+            z_val = z_min + frac * (z_max - z_min)
+            y = int(pad_t + frac * chart_h)
+            painter.setPen(QPen(QColor(180, 180, 180), 1))
+            painter.drawText(0, y - 6, pad_l - 4, 12,
+                             Qt.AlignmentFlag.AlignRight,
+                             f"{int(z_val)}")
+            painter.setPen(QPen(QColor(50, 50, 50, 160), 1, Qt.PenStyle.DotLine))
+            painter.drawLine(pad_l, y, pad_l + strip_w, y)
+
+        # ── Strip border ──────────────────────────────────────────────────
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawRect(pad_l, pad_t, strip_w, chart_h)
+
+        # ── X-axis label (under the strip only) ──────────────────────────
+        painter.setPen(QPen(QColor(120, 120, 120), 1))
+        painter.drawText(pad_l, h - 28 + 2, strip_w, 26,
+                         Qt.AlignmentFlag.AlignHCenter,
+                         "\u2190 small peaks  ·  large peaks \u2192")
+
+        # ── POI markers ───────────────────────────────────────────────────
+        if self._show_poi and self._poi_z is not None:
+            poi_pen = QPen(QColor(50, 210, 80),
+                           float(self._line_thickness), Qt.PenStyle.DashLine)
+            painter.setPen(poi_pen)
+            for z in self._poi_z:
+                if z_max > z_min:
+                    frac = (z - z_min) / (z_max - z_min)
+                    y = int(pad_t + frac * chart_h)
+                    painter.drawLine(pad_l, y, pad_l + strip_w, y)
+
+        # ── Band legend (right of strip) ──────────────────────────────────
+        if legend_entries:
+            legend_h = lh * len(legend_entries) + 4
+            lx = pad_l + strip_w + legend_gap
+            ly = pad_t
+            painter.fillRect(lx, ly, legend_w, legend_h, QColor(25, 25, 25, 220))
+            for ei, (col_hex, lbl) in enumerate(legend_entries):
+                ey = ly + 2 + ei * lh
+                painter.fillRect(lx + 3, ey + (lh - 6) // 2,
+                                 swatch, 6, QColor(col_hex))
+                painter.setPen(QPen(QColor(200, 200, 200), 1))
+                painter.drawText(
+                    lx + 3 + swatch + gap, ey,
+                    legend_col_w + 4, lh,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    lbl,
+                )
+
+        # ── Crosshair ─────────────────────────────────────────────────────
+        if self._crosshair_row is not None:
+            frac = (self._crosshair_row - z_min) / (z_max - z_min)
+            y = int(pad_t + frac * chart_h)
+            if pad_t <= y <= pad_t + chart_h:
+                painter.setPen(QPen(QColor(255, 160, 0), 1, Qt.PenStyle.DashLine))
+                painter.drawLine(pad_l, y, pad_l + strip_w, y)
+                if self._crosshair_value is not None:
+                    row_int = int(round(self._crosshair_row))
+                    label = f"Row {row_int}  ·  total: {self._crosshair_value:.4g}"
+                    fm2 = painter.fontMetrics()
+                    lw2 = fm2.horizontalAdvance(label) + 10
+                    lh2 = fm2.height() + 6
+                    lx2 = pad_l + strip_w - lw2 - 4
+                    ly2 = y - lh2 - 3
+                    if ly2 < pad_t:
+                        ly2 = y + 4
+                    painter.fillRect(lx2, ly2, lw2, lh2, QColor(0, 0, 0, 200))
+                    painter.setPen(QPen(QColor(255, 200, 80), 1))
+                    painter.drawText(
+                        lx2 + 5, ly2 + 2, lw2 - 10, lh2 - 4,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        label,
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -560,12 +811,14 @@ class StageDetailDialog(QDialog):
         self._signal_split.setStretchFactor(1, 1)
         self._signal_split.setVisible(False)
 
-        # Container that holds both (only one visible at a time)
+        # Container that holds both (only one visible at a time).
+        # Both get stretch=1 so whichever is visible expands to fill
+        # the available height instead of collapsing to its sizeHint().
         content_container = QFrame()
         cc_layout = QVBoxLayout(content_container)
         cc_layout.setContentsMargins(0, 0, 0, 0)
-        cc_layout.addWidget(self._content_stack)
-        cc_layout.addWidget(self._signal_split)
+        cc_layout.addWidget(self._content_stack, 1)
+        cc_layout.addWidget(self._signal_split, 1)
 
         root.addWidget(content_container, stretch=1)
 
@@ -693,6 +946,11 @@ class StageDetailDialog(QDialog):
                 # ── Side-by-side: source image left, chart right ───────
                 self._content_stack.setVisible(False)
                 self._signal_split.setVisible(True)
+                # Force equal split the first time the splitter is shown so
+                # the chart isn't collapsed to its minimum size.
+                if sum(self._signal_split.sizes()) == 0:
+                    half = max(200, self._signal_split.width() // 2)
+                    self._signal_split.setSizes([half, half])
 
                 # Load signal into chart
                 self._chart.set_data(
@@ -700,6 +958,7 @@ class StageDetailDialog(QDialog):
                     stage.z_axis_px,
                     stage.poi_z_px,
                     stage.mode_name,
+                    extra_signals=stage.extra_signals,
                 )
 
                 # Load source image (ROI-cropped if roi metadata available)

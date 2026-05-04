@@ -188,12 +188,17 @@ def run_liquid_pipeline(
                         image_size=(image_set.frames[0].shape[0],
                                     image_set.frames[0].shape[1]) if image_set.frames else None,
                         mode_name=mode_cfg.mode_name,
+                        features=features,
                     ):
                         debug_data.add(stage)
                 elif mode_cfg.mode_name.startswith("LineContinuity"):
                     for stage in collect_ridge_stages(
                         image_set.pipette_index, mode_cfg.mode_name,
                         features, profile, pois, cache, mode_cfg.params,
+                        roi=image_set.roi,
+                        roi_points=image_set.roi_points,
+                        image_size=(image_set.frames[0].shape[0],
+                                    image_set.frames[0].shape[1]) if image_set.frames else None,
                     ):
                         debug_data.add(stage)
 

@@ -53,6 +53,11 @@ class DebugStage:
     poi_z_px: Optional[List[float]] = None       # detected POI positions (signal)
     overlay_points: Optional[List[tuple]] = None # [(x,y)…] drawn on image
 
+    # Additional named signal bands rendered as extra coloured lines on the chart.
+    # Each entry: {"signal": np.ndarray, "label": str, "color": str}
+    # where color is a CSS-style hex string e.g. "#ff8800".
+    extra_signals: Optional[List[Dict[str, Any]]] = None
+
     metadata: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
 
@@ -128,6 +133,10 @@ class RawFeatures:
 
     # 2-D outputs (tip edge detection)
     edge_map: Optional[np.ndarray] = None       # same HxW as input ROI
+
+    # Multi-band peak signals (populated by RowContrastExtractor for peak_count_bands_h).
+    # Each entry: {"signal": np.ndarray, "label": str, "color": str (hex)}.
+    band_signals: Optional[List[Dict[str, Any]]] = None
 
 
 # ---------------------------------------------------------------------------

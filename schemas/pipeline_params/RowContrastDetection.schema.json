@@ -8,9 +8,9 @@
     "_group_signal": { "type": "string", "const": "--- Signal ---" },
     "stat": {
       "type": "string",
-      "enum": ["std", "variance", "std_v", "variance_v", "peak_count_h", "peak_prominence_sum_h"],
+      "enum": ["std", "variance", "std_v", "variance_v", "peak_count_h", "peak_prominence_sum_h", "peak_prominence_mean_h", "peak_width_mean_h", "peak_count_bands_h"],
       "default": "std",
-      "description": "Which per-row statistic to compute.\n\n'std' (default) \u2014 standard deviation of pixel values within each row (horizontal). High where a scanline contains many alternating bright/dark patches.\n\n'variance' \u2014 squared std within each row (horizontal). Same as 'std' but amplifies large deviations more.\n\n'std_v' \u2014 local sliding-window std of the per-row mean along the z-axis (vertical). High where mean intensity changes rapidly between adjacent rows \u2014 a vertical edge detector.\n\n'variance_v' \u2014 squared version of std_v (vertical).\n\n'peak_count_h' \u2014 number of significant peaks in each row's intensity profile, normalised by row width^exponent. Counts only peaks meeting the minimum distance and prominence thresholds. Distinguishes rows with many distinct features from flat rows.\n\n'peak_prominence_sum_h' \u2014 sum of peak prominences in each row, normalised by row width^exponent. Rewards rows with large-amplitude oscillations (tall peaks) over rows that are merely noisy (many tiny bumps)."
+      "description": "Which per-row statistic to compute.\n\n'std' (default) \u2014 standard deviation of pixel values within each row (horizontal). High where a scanline contains many alternating bright/dark patches.\n\n'variance' \u2014 squared std within each row (horizontal). Same as 'std' but amplifies large deviations more.\n\n'std_v' \u2014 local sliding-window std of the per-row mean along the z-axis (vertical). High where mean intensity changes rapidly between adjacent rows \u2014 a vertical edge detector.\n\n'variance_v' \u2014 squared version of std_v (vertical).\n\n'peak_count_h' \u2014 number of significant peaks in each row's intensity profile, normalised by row width^exponent. Counts only peaks meeting the minimum distance and prominence thresholds. Distinguishes rows with many distinct features from flat rows.\n\n'peak_prominence_sum_h' \u2014 sum of peak prominences in each row, normalised by row width^exponent. Rewards rows with large-amplitude oscillations (tall peaks) over rows that are merely noisy (many tiny bumps).\n\n'peak_prominence_mean_h' \u2014 mean prominence of qualifying peaks per row, normalised by row width^exponent. Answers 'how tall are the typical peaks at this row?'\n\n'peak_width_mean_h' \u2014 mean half-prominence width (in pixels) of qualifying peaks per row, normalised by row width^exponent. Answers 'how broad are the typical peaks at this row?'\n\n'peak_count_bands_h' \u2014 multi-band version of peak_count_h. The primary signal is the total peak count (with peak_min_prominence applied). The chart additionally shows one coloured line per prominence band defined by peak_band_edges, allowing you to see the distribution of peak sizes across rows in a single view."
     },
     "vertical_window_px": {
       "type": "integer",
@@ -39,7 +39,20 @@
       "minimum": 0,
       "maximum": 255,
       "default": 5.0,
-      "description": "Minimum prominence (0\u2013255 raw intensity units) for a local maximum to count as a peak. Prominence = how much you must descend from the peak before reaching a taller neighbour. Setting this above the noise floor filters out \"rocky but flat\" rows while keeping rows with genuine large swings. Only used when stat = 'peak_count_h' or 'peak_prominence_sum_h'."
+      "description": "Minimum prominence (0\u2013255 raw intensity units) for a local maximum to count as a peak. Prominence = how much you must descend from the peak before reaching a taller neighbour. Setting this above the noise floor filters out \"rocky but flat\" rows while keeping rows with genuine large swings. Only used when stat = 'peak_count_h', 'peak_prominence_sum_h', 'peak_prominence_mean_h', 'peak_width_mean_h', or 'peak_count_bands_h'."
+    },
+    "peak_max_prominence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0.0,
+      "description": "Maximum prominence (0\u2013255) for a peak to be counted. 0 = disabled (no upper limit). Use this to exclude very tall peaks (e.g. glare artefacts) and focus on peaks within a specific prominence range. Only used when stat uses peak analysis."
+    },
+    "peak_band_edges": {
+      "type": "array",
+      "items": { "type": "number", "minimum": 0, "maximum": 255 },
+      "default": [10, 25, 50],
+      "description": "Prominence band boundary values for 'peak_count_bands_h'. Defines the edges between prominence bands. Three values [10, 25, 50] produce four bands: 0\u201310, 10\u201325, 25\u201350, \u226550. Each band is shown as a separate coloured line on the signal chart. peak_min_prominence still applies as a global floor across all bands."
     },
     "peak_width_exponent": {
       "type": "number",

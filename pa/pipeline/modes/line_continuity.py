@@ -31,9 +31,42 @@ def _apply_contrast(image_set: ImageSet, params: dict) -> ImageSet:
     )
 
 
+def _apply_roi_expansion(image_set: ImageSet, params: dict) -> ImageSet:
+    """Expand the ROI polygon outward by ``roi_expansion_px`` pixels.
+
+    Returns the input image_set unchanged when expansion == 0 or roi_points
+    is missing.  Otherwise returns a new ImageSet with both ``roi`` (the
+    expanded bounding box) and ``roi_points`` (the expanded polygon) updated.
+    """
+    expansion = int(params.get("roi_expansion_px", 0) or 0)
+    if expansion == 0 or not image_set.roi_points or not image_set.frames:
+        return image_set
+
+    img_h, img_w = image_set.frames[0].shape[:2]
+    expanded_pts = ip.expand_roi_points(image_set.roi_points, expansion, img_h, img_w)
+    xs = [p[0] for p in expanded_pts]
+    ys = [p[1] for p in expanded_pts]
+    x0 = max(0, int(min(xs)))
+    y0 = max(0, int(min(ys)))
+    x1 = min(img_w, int(max(xs)) + 1)
+    y1 = min(img_h, int(max(ys)) + 1)
+    expanded_bbox = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
+    return ImageSet(
+        pipette_index=image_set.pipette_index,
+        frames=image_set.frames,
+        source_paths=image_set.source_paths,
+        roi=expanded_bbox,
+        roi_points=expanded_pts,
+        reference_frames=image_set.reference_frames,
+        reference_source_paths=image_set.reference_source_paths,
+    )
+
+
 def _get_ridge_features(params, image_set, cache):
     """Shared helper — runs RidgeExtractor once per step (cache hit on repeat calls)."""
-    return RidgeExtractor(params).extract(_apply_contrast(image_set, params), cache)
+    prepared = _apply_roi_expansion(_apply_contrast(image_set, params), params)
+    return RidgeExtractor(params).extract(prepared, cache)
 
 
 class LineContinuityTerminations(BaseLiquidMode):

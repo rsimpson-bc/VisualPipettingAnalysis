@@ -117,6 +117,20 @@ def presets_for_mode(mode: str, path: Optional[str] = None) -> List[Dict[str, An
     return [p for p in reversed(data.get("presets", [])) if p.get("mode") == mode]
 
 
+def delete_preset(preset_id: str, path: Optional[str] = None) -> bool:
+    """Remove the preset with *preset_id* from the file.
+
+    Returns True if an entry was removed, False if the id was not found.
+    """
+    data = load_presets(path)
+    before = len(data.get("presets", []))
+    data["presets"] = [p for p in data.get("presets", []) if p.get("id") != preset_id]
+    if len(data["presets"]) == before:
+        return False
+    save_presets(data, path)
+    return True
+
+
 def format_combo_label(entry: Dict[str, Any], max_desc: int = 50) -> str:
     """Return a short human-readable label for a preset combo-box item."""
     created = entry.get("created", "")[:16].replace("T", " ")  # "2026-05-01 14:32"

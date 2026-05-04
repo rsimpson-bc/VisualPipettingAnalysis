@@ -88,21 +88,12 @@ def collect_intensity_stages(
     roi_points: Optional[List[tuple]] = None,
     image_size: Optional[tuple] = None,
     mode_name: str = "IntensityDetection",
+    features=None,
 ) -> List[DebugStage]:
     stages = []
-    blur_p = {"method": params.get("blur_method", "gaussian"),
-               "kernel_size": params.get("blur_kernel", 5)}
-    s = collect_blur_stage(pipette_index, mode_name, cache, blur_p, None)
-    if s:
-        stages.append(s)
-    if params.get("use_ab", True):
-        s2 = collect_ab_stage(pipette_index, mode_name, cache)
-        if s2:
-            stages.insert(0, s2)
 
-    # If roi_expansion_px > 0, derive ROI3 (expanded polygon) and expand the
-    # bbox to match the region the extractor analysed.  ROI1 keeps the
-    # original calibrated polygon for visual reference.
+    # --- 1. Compute effective ROI (original or expanded) first so image
+    #        stages can be cropped to it and share consistent metadata. ---
     expansion = int(params.get("roi_expansion_px", 0) or 0)
     expanded_points: Optional[List[tuple]] = None
     expanded_bbox: Optional[tuple] = None
@@ -118,16 +109,112 @@ def collect_intensity_stages(
         x1 = min(img_w, int(max(xs)) + 1)
         y1 = min(img_h, int(max(ys)) + 1)
         expanded_bbox = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+    effective_bbox = expanded_bbox if expanded_bbox is not None else roi
 
+    # Helper: crop a full-frame image array to the effective ROI bbox.
+    def _crop(arr: np.ndarray) -> np.ndarray:
+        if arr is None or effective_bbox is None:
+            return arr
+        return ip_module.extract_roi(arr, effective_bbox)
+
+    # Shared metadata for image stages (display crop + ROI polygon overlays).
+    base_img_meta: dict = {}
+    if effective_bbox is not None:
+        base_img_meta["display_bbox"] = list(effective_bbox)
+    if roi_points:
+        base_img_meta["roi1_points"] = [list(p) for p in roi_points]
+    if expanded_points:
+        base_img_meta["roi3_points"] = [list(p) for p in expanded_points]
+
+    # --- 2. A:B accumulation stage (full-frame; no crop applied here) ---
+    if params.get("use_ab", True):
+        s2 = collect_ab_stage(pipette_index, mode_name, cache)
+        if s2:
+            stages.append(s2)
+
+    # --- 3. Contrast Frame (RowContrastDetection, use_contrast=True, no A:B) ---
+    if (mode_name == "RowContrastDetection"
+            and params.get("use_contrast", False)
+            and not params.get("use_ab", False)):
+        contrast_img = cache.get(pipette_index, "contrast_frame", {})
+        if contrast_img is not None:
+            stages.append(DebugStage(
+                name="Contrast Frame",
+                mode_name=mode_name,
+                pipette_index=pipette_index,
+                image=_crop(_to_display(contrast_img)),
+                description=(
+                    f"Input frame after reference subtraction "
+                    f"({params.get('contrast_mode', 'absolute')} mode, "
+                    f"min={params.get('contrast_min', 0)}, "
+                    f"max={params.get('contrast_max', 100)})."
+                ),
+                metadata={
+                    **base_img_meta,
+                    "contrast_mode": params.get("contrast_mode", "absolute"),
+                    "contrast_min": params.get("contrast_min", 0),
+                    "contrast_max": params.get("contrast_max", 100),
+                },
+            ))
+
+    # --- 4. Blur stage.
+    #        Use the FULL blur params dict (5 keys) to match the key under
+    #        which the extractor stored the result in the cache.  The old
+    #        2-key lookup always missed, so this stage never appeared. ---
+    blur_p_full = {
+        "method":      params.get("blur_method", "gaussian"),
+        "kernel_size": params.get("blur_kernel", 5),
+        "d":           params.get("bilateral_d", 9),
+        "sigma_color": params.get("bilateral_sigma_color", 75.0),
+        "sigma_space": params.get("bilateral_sigma_space", 75.0),
+    }
+    blurred = cache.get(pipette_index, "blur", blur_p_full)
+    if blurred is not None:
+        stages.append(DebugStage(
+            name="Blur",
+            mode_name=mode_name,
+            pipette_index=pipette_index,
+            image=_crop(_to_display(blurred)),
+            description=(
+                f"{blur_p_full['method']} blur, "
+                f"kernel={blur_p_full['kernel_size']}"
+            ),
+            metadata={**base_img_meta},
+        ))
+
+    # --- 5. Gradient stage (RowContrastDetection only, when method != 'none') ---
+    if mode_name == "RowContrastDetection":
+        grad_method = params.get("gradient_method", "none")
+        if grad_method != "none":
+            grad_ksize = params.get("gradient_ksize", 3)
+            grad_img = cache.get(pipette_index, "gradient",
+                                  {"method": grad_method, "ksize": grad_ksize})
+            if grad_img is not None:
+                stages.append(DebugStage(
+                    name="Gradient",
+                    mode_name=mode_name,
+                    pipette_index=pipette_index,
+                    image=_crop(_to_display(grad_img)),
+                    description=(
+                        f"Sobel gradient magnitude ({grad_method}, "
+                        f"ksize={grad_ksize}) applied after blur."
+                    ),
+                    metadata={
+                        **base_img_meta,
+                        "gradient_method": grad_method,
+                        "gradient_ksize": grad_ksize,
+                    },
+                ))
+
+    # --- 6. Signal stage ---
     poi_z = [p.z_px for p in poi_list]
     meta: dict = {
         "threshold": params.get("intensity_threshold", 0.3),
         "candidates": len(poi_z),
     }
-    effective_bbox = expanded_bbox if expanded_bbox is not None else roi
     if effective_bbox is not None:
-        meta["roi"] = list(effective_bbox)         # [x, y, w, h]
-        meta["display_bbox"] = list(effective_bbox)  # used by ROI overlay drawing
+        meta["roi"] = list(effective_bbox)
+        meta["display_bbox"] = list(effective_bbox)
     if roi_points:
         meta["roi1_points"] = [list(p) for p in roi_points]
     if expanded_points:
@@ -139,6 +226,7 @@ def collect_intensity_stages(
         signal=profile.signal,
         z_axis_px=profile.z_axis_px,
         poi_z_px=poi_z,
+        extra_signals=getattr(features, "band_signals", None),
         description="Per-row mean intensity (normalised). Peaks = candidate transitions."
                     if mode_name == "IntensityDetection" else
                     "Per-row cross-sectional std (normalised). Peaks = high-contrast transitions.",
@@ -159,27 +247,85 @@ def collect_ridge_stages(
     poi_list: List[PointOfInterest],
     cache: ProcessedImageCache,
     params: dict,
+    roi: Optional[tuple] = None,
+    roi_points: Optional[List[tuple]] = None,
+    image_size: Optional[tuple] = None,
 ) -> List[DebugStage]:
     stages = []
-    blur_p = {"method": "gaussian", "kernel_size": params.get("blur_kernel", 5)}
-    s = collect_blur_stage(pipette_index, mode_name, cache, blur_p, None)
-    if s:
-        stages.append(s)
 
-    # Gradient magnitude (not directly in cache, but edge_map is in RawFeatures)
+    # ── Compute effective ROI after any expansion ────────────────────────────
+    # NOTE: RidgeExtractor crops gray8 to the ROI *before* blurring, so the
+    # blur image in cache and edge_map are both already in ROI-local coords.
+    # Do NOT apply a second crop; just use the images as-is.  The display_bbox
+    # / roi1_points / roi3_points metadata is still required so the AB dialog
+    # knows where to crop the *source overlay* and draw ROI polygons.
+    expansion = int(params.get("roi_expansion_px", 0) or 0)
+    expanded_points: Optional[List[tuple]] = None
+    expanded_bbox: Optional[tuple] = None
+    if expansion != 0 and roi_points and image_size is not None:
+        img_h, img_w = image_size[0], image_size[1]
+        expanded_points = ip_module.expand_roi_points(roi_points, expansion, img_h, img_w)
+        xs = [p[0] for p in expanded_points]
+        ys = [p[1] for p in expanded_points]
+        x0 = max(0, int(min(xs)))
+        y0 = max(0, int(min(ys)))
+        x1 = min(img_w, int(max(xs)) + 1)
+        y1 = min(img_h, int(max(ys)) + 1)
+        expanded_bbox = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+    effective_bbox = expanded_bbox if expanded_bbox is not None else roi
+
+    # Shared metadata for image stages
+    base_img_meta: dict = {}
+    if effective_bbox is not None:
+        base_img_meta["display_bbox"] = list(effective_bbox)
+    if roi_points:
+        base_img_meta["roi1_points"] = [list(p) for p in roi_points]
+    if expanded_points:
+        base_img_meta["roi3_points"] = [list(p) for p in expanded_points]
+
+    # ── Blur stage (5-key cache lookup to match what RidgeExtractor stores) ──
+    blur_p_full = {
+        "method":      params.get("blur_method", "gaussian"),
+        "kernel_size": params.get("blur_kernel", 5),
+        "d":           params.get("bilateral_d", 9),
+        "sigma_color": params.get("bilateral_sigma_color", 75.0),
+        "sigma_space": params.get("bilateral_sigma_space", 75.0),
+    }
+    blurred = cache.get(pipette_index, "blur", blur_p_full)
+    if blurred is not None:
+        stages.append(DebugStage(
+            name="Blur",
+            mode_name=mode_name,
+            pipette_index=pipette_index,
+            image=_to_display(blurred),  # already in ROI-local coords, no re-crop
+            description=(
+                f"{blur_p_full['method']} blur, "
+                f"kernel={blur_p_full['kernel_size']}"
+            ),
+            metadata={
+                **base_img_meta,
+                "blur_method":  blur_p_full["method"],
+                "kernel_size":  blur_p_full["kernel_size"],
+            },
+        ))
+
+    # ── Ridge Mask stage ─────────────────────────────────────────────────────
     if features.edge_map is not None:
         stages.append(DebugStage(
             name="Ridge Mask",
             mode_name=mode_name,
             pipette_index=pipette_index,
-            image=features.edge_map,
+            image=features.edge_map,  # already in ROI-local coords, no re-crop
             description=(
                 f"Binary ridge mask after orientation filter "
                 f"(±{params.get('angle_tolerance', 30)}°) and morphology."
             ),
-            metadata={"ridge_threshold": params.get("ridge_threshold", 30),
-                      "morph_close": params.get("morph_close_enabled", True),
-                      "morph_open": params.get("morph_open_enabled", True)},
+            metadata={
+                **base_img_meta,
+                "ridge_threshold": params.get("ridge_threshold", 30),
+                "morph_close":     params.get("morph_close_enabled", True),
+                "morph_open":      params.get("morph_open_enabled", True),
+            },
         ))
 
     # 1D signal

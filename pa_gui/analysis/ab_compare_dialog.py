@@ -176,6 +176,98 @@ def _ndarray_to_pixmap(arr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
+def _band_distribution_arr(
+    signal: np.ndarray,
+    z_axis: Optional[np.ndarray],
+    poi_z: Optional[List[float]],
+    extra_signals: List[dict],
+    w: int,
+    h: int,
+    line_thickness: int,
+    show_poi: bool,
+) -> np.ndarray:
+    """Render peak_count_bands_h as a per-row horizontal color distribution strip.
+
+    Each row is a horizontal bar whose width-segments are proportional to the
+    fraction of peaks in each prominence band:
+        [band0_color × frac0][band1_color × frac1] ...
+    Rows with zero peaks are dark.  The result is built at native row
+    resolution then nearest-neighbor-resized to (h, w).
+    """
+    n = len(signal)
+
+    # Parse band colors to BGR (OpenCV order)
+    band_colors: List[tuple] = []
+    for band in extra_signals:
+        col_hex = band.get("color", "#888888").lstrip("#")
+        try:
+            r = int(col_hex[0:2], 16)
+            g = int(col_hex[2:4], 16)
+            b = int(col_hex[4:6], 16)
+            band_colors.append((b, g, r))
+        except Exception:
+            band_colors.append((128, 128, 128))
+
+    z_min = float(z_axis[0])  if z_axis is not None and len(z_axis) >= 2 else 0.0
+    z_max = float(z_axis[-1]) if z_axis is not None and len(z_axis) >= 2 else float(n - 1)
+
+    # Reserve right-side legend panel so it doesn't overlap the strip.
+    # Use a fixed per-character estimate (cv2 can't measure text precisely).
+    lh_cv = 12
+    swatch_cv = 8
+    pad_cv = 3
+    legend_entries = [(b.get("color", "#888"), b.get("label", "")) for b in extra_signals]
+    max_lbl_chars = max((len(lbl) for _, lbl in legend_entries), default=4)
+    legend_panel_w = max_lbl_chars * 6 + swatch_cv + pad_cv * 3 + 8  # px estimate
+    legend_panel_w = max(legend_panel_w, 55)
+    strip_w = max(1, w - legend_panel_w - 4)
+
+    # Build at native row resolution then resize — clean pixel boundaries
+    strip = np.zeros((n, strip_w, 3), dtype=np.uint8)
+    for i in range(n):
+        x_pos = 0
+        for bi, band in enumerate(extra_signals):
+            sig_arr = band.get("signal")
+            frac = float(sig_arr[i]) if (sig_arr is not None and i < len(sig_arr)) else 0.0
+            bw = int(frac * strip_w)
+            if bw > 0 and x_pos < strip_w:
+                x_end = min(x_pos + bw, strip_w)
+                strip[i, x_pos:x_end] = band_colors[bi]
+            x_pos = min(x_pos + bw, strip_w)
+
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    canvas[:, :strip_w] = cv2.resize(strip, (strip_w, h), interpolation=cv2.INTER_NEAREST)
+    # Legend background
+    canvas[:, strip_w:] = (20, 20, 20)
+
+    # POI markers (strip only)
+    if show_poi and poi_z is not None and z_axis is not None and len(z_axis) >= 2:
+        for z in poi_z:
+            if z_max > z_min:
+                y = int((z - z_min) / (z_max - z_min) * (h - 1))
+                y = max(0, min(y, h - 1))
+                cv2.line(canvas, (0, y), (strip_w - 1, y), (50, 210, 50), line_thickness)
+
+    # Legend in right panel
+    if legend_entries:
+        legend_h_total = lh_cv * len(legend_entries) + pad_cv * 2
+        lx = strip_w + 4
+        ly = max(4, (h - legend_h_total) // 2)  # vertically centred
+        for ei, (col_hex, lbl) in enumerate(legend_entries):
+            col_hex = col_hex.lstrip("#")
+            try:
+                r = int(col_hex[0:2], 16); g = int(col_hex[2:4], 16); b = int(col_hex[4:6], 16)
+                bgr_l = (b, g, r)
+            except Exception:
+                bgr_l = (128, 128, 128)
+            ey = ly + pad_cv + ei * lh_cv
+            cv2.rectangle(canvas, (lx, ey + 2), (lx + swatch_cv, ey + lh_cv - 2), bgr_l, -1)
+            cv2.putText(canvas, lbl, (lx + swatch_cv + pad_cv, ey + lh_cv - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.30, (200, 200, 200), 1, cv2.LINE_AA)
+
+    return canvas
+
+
 def _signal_pixmap_arr(
     signal: np.ndarray,
     z_axis: Optional[np.ndarray] = None,
@@ -185,12 +277,29 @@ def _signal_pixmap_arr(
     line_thickness: int = 2,
     log_scale: bool = False,
     show_poi: bool = True,
+    extra_signals: Optional[List[dict]] = None,
 ) -> np.ndarray:
     """Return a BGR numpy array (h, w, 3) of the horizontal signal chart."""
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
     if signal is None or len(signal) < 2:
         return canvas
+
+    # Band distribution mode: delegate to dedicated renderer
+    if (extra_signals is not None
+            and len(extra_signals) > 0
+            and extra_signals[0].get("viz") == "band_distribution"):
+        return _band_distribution_arr(
+            signal, z_axis, poi_z, extra_signals, w, h, line_thickness, show_poi
+        )
+
     mn, mx = float(signal.min()), float(signal.max())
+    # Extend range to include band signals so all lines share one axis
+    if extra_signals:
+        for band in extra_signals:
+            bs = band.get("signal")
+            if bs is not None and len(bs) > 0:
+                mn = min(mn, float(bs.min()))
+                mx = max(mx, float(bs.max()))
     if mx == mn:
         return canvas
 
@@ -210,6 +319,13 @@ def _signal_pixmap_arr(
     else:
         z_min, z_max = 0.0, float(n - 1)
 
+    def _norm_val(v_raw: float) -> float:
+        if log_scale:
+            lmn = float(np.log1p(max(0.0, mn)))
+            lmx = float(np.log1p(max(0.0, mx)))
+            return (float(np.log1p(max(0.0, v_raw))) - lmn) / max(lmx - lmn, 1e-9)
+        return (v_raw - mn) / max(mx - mn, 1e-9)
+
     # Signal line: x = intensity (left→right), y = row (top→bottom)
     # Color: blue BGR(255, 130, 70)
     pts = []
@@ -220,6 +336,56 @@ def _signal_pixmap_arr(
         pts.append((x, y))
     for i in range(len(pts) - 1):
         cv2.line(canvas, pts[i], pts[i + 1], (255, 130, 70), line_thickness)
+
+    # Extra band lines
+    if extra_signals:
+        band_thick = max(1, line_thickness - 1)
+        for band in extra_signals:
+            bs = band.get("signal")
+            if bs is None or len(bs) < 2:
+                continue
+            # Parse hex color to BGR
+            col_hex = band.get("color", "#888888").lstrip("#")
+            try:
+                r = int(col_hex[0:2], 16)
+                g = int(col_hex[2:4], 16)
+                b = int(col_hex[4:6], 16)
+                bgr = (b, g, r)
+            except Exception:
+                bgr = (128, 128, 128)
+            bpts = []
+            for i, v_raw in enumerate(bs):
+                z = float(z_axis[i]) if z_axis is not None and i < len(z_axis) else float(i)
+                x = int(_norm_val(float(v_raw)) * (w - 14)) + 7
+                y = int((z - z_min) / max(z_max - z_min, 1) * (h - 1))
+                bpts.append((x, y))
+            for i in range(len(bpts) - 1):
+                cv2.line(canvas, bpts[i], bpts[i + 1], bgr, band_thick)
+
+        # Compact legend (top-right)
+        legend_entries = [("#4682ff", "total")] + [
+            (b.get("color", "#888"), b.get("label", "")) for b in extra_signals
+        ]
+        lh = 12
+        swatch_w = 8
+        pad = 3
+        max_lbl_w = max(len(lbl) * 5 + swatch_w + pad * 3 for _, lbl in legend_entries)
+        legend_h = lh * len(legend_entries) + pad * 2
+        lx = w - max_lbl_w - 4
+        ly = 4
+        cv2.rectangle(canvas, (lx - 2, ly - 2), (lx + max_lbl_w + 2, ly + legend_h + 2),
+                      (0, 0, 0), -1)
+        for ei, (col_hex, lbl) in enumerate(legend_entries):
+            col_hex = col_hex.lstrip("#")
+            try:
+                r = int(col_hex[0:2], 16); g = int(col_hex[2:4], 16); b = int(col_hex[4:6], 16)
+                bgr_l = (b, g, r)
+            except Exception:
+                bgr_l = (128, 128, 128)
+            ey = ly + pad + ei * lh
+            cv2.rectangle(canvas, (lx, ey + 2), (lx + swatch_w, ey + lh - 2), bgr_l, -1)
+            cv2.putText(canvas, lbl, (lx + swatch_w + pad, ey + lh - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.30, (200, 200, 200), 1, cv2.LINE_AA)
 
     # POI markers — horizontal lines
     # Color: green BGR(50, 210, 50)
@@ -252,8 +418,14 @@ def _stage_to_pixmap(
     show_roi3: bool = False,
     log_scale: bool = False,
     show_poi: bool = True,
+    companion_signal_stage: Optional["DebugStage"] = None,
 ) -> QPixmap:
-    """Render a DebugStage as QPixmap, optionally blended with the source."""
+    """Render a DebugStage as QPixmap, optionally blended with the source.
+
+    If *companion_signal_stage* is provided and this is an image stage, the
+    signal chart from the companion stage is appended on the right (same
+    layout as signal stages: [image | chart]).
+    """
     if stage.image is not None:
         img = stage.image
         if img.dtype != np.uint8:
@@ -270,6 +442,27 @@ def _stage_to_pixmap(
             else:
                 img = img.copy()
             img = cv2.addWeighted(img, 1.0 - overlay_alpha, src, overlay_alpha, 0)
+        elif img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        else:
+            img = img.copy()
+
+        # Append companion signal chart if available
+        if companion_signal_stage is not None and companion_signal_stage.signal is not None:
+            img_h, img_w = img.shape[:2]
+            chart_w = max(120, min(300, img_w // 4))
+            chart_arr = _signal_pixmap_arr(
+                companion_signal_stage.signal,
+                companion_signal_stage.z_axis_px,
+                companion_signal_stage.poi_z_px,
+                w=chart_w, h=img_h,
+                line_thickness=line_thickness,
+                log_scale=log_scale,
+                show_poi=show_poi,
+                extra_signals=companion_signal_stage.extra_signals,
+            )
+            sep = np.full((img_h, 2, 3), 55, dtype=np.uint8)
+            img = np.concatenate([img, sep, chart_arr], axis=1)
 
         return _ndarray_to_pixmap(img)
 
@@ -320,7 +513,8 @@ def _stage_to_pixmap(
                                            w=chart_w, h=src_h,
                                            line_thickness=line_thickness,
                                            log_scale=log_scale,
-                                           show_poi=show_poi)
+                                           show_poi=show_poi,
+                                           extra_signals=stage.extra_signals)
             sep = np.full((src_h, 2, 3), 55, dtype=np.uint8)
             composite = np.concatenate([src, sep, chart_arr], axis=1)
             return _ndarray_to_pixmap(composite)
@@ -330,7 +524,8 @@ def _stage_to_pixmap(
                                        w=_CHART_W, h=_CHART_H,
                                        line_thickness=line_thickness,
                                        log_scale=log_scale,
-                                       show_poi=show_poi)
+                                       show_poi=show_poi,
+                                       extra_signals=stage.extra_signals)
         return _ndarray_to_pixmap(chart_arr)
 
     pm = QPixmap(320, 220)
@@ -436,6 +631,8 @@ class ABCompareDialog(QDialog):
         self._show_poi: bool = True
         self._multi_results: List[dict] = []
         self._tip_row_widgets: List[tuple] = []  # (lbl_a, lbl_b) per pipette
+        self._hover_stage_a: Optional["DebugStage"] = None
+        self._hover_stage_b: Optional["DebugStage"] = None
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -728,6 +925,7 @@ class ABCompareDialog(QDialog):
         self._preset_preview.setPlaceholderText("Select a preset above to preview it.")
         pb_layout.addWidget(self._preset_preview)
 
+        load_delete_row = QHBoxLayout()
         self._load_preset_btn = QPushButton("Load into B")
         self._load_preset_btn.setEnabled(False)
         self._load_preset_btn.setToolTip(
@@ -738,7 +936,18 @@ class ABCompareDialog(QDialog):
             "QPushButton:disabled { background:#333; color:#666; }"
         )
         self._load_preset_btn.clicked.connect(self._on_load_preset)
-        pb_layout.addWidget(self._load_preset_btn)
+        load_delete_row.addWidget(self._load_preset_btn, 1)
+
+        self._delete_preset_btn = QPushButton("Delete")
+        self._delete_preset_btn.setEnabled(False)
+        self._delete_preset_btn.setToolTip("Permanently delete the selected preset.")
+        self._delete_preset_btn.setStyleSheet(
+            "QPushButton { background:#3a0000; color:#ff6666; }"
+            "QPushButton:disabled { background:#333; color:#666; }"
+        )
+        self._delete_preset_btn.clicked.connect(self._on_delete_preset)
+        load_delete_row.addWidget(self._delete_preset_btn)
+        pb_layout.addLayout(load_delete_row)
 
         left_layout.addWidget(presets_box)
 
@@ -841,6 +1050,12 @@ class ABCompareDialog(QDialog):
         a_lay.addWidget(a_hdr)
         self._view_a = _ZoomableView("A")
         a_lay.addWidget(self._view_a, 1)
+        self._hover_lbl_a = QLabel("")
+        self._hover_lbl_a.setFixedHeight(16)
+        self._hover_lbl_a.setStyleSheet(
+            "font-size:10px; color:#ffc850; background:#1a1a1a; padding:0 5px;"
+        )
+        a_lay.addWidget(self._hover_lbl_a)
         self._score_lbl_a = QLabel("")
         self._score_lbl_a.setWordWrap(True)
         self._score_lbl_a.setStyleSheet(
@@ -859,6 +1074,12 @@ class ABCompareDialog(QDialog):
         b_lay.addWidget(b_hdr)
         self._view_b = _ZoomableView("B")
         b_lay.addWidget(self._view_b, 1)
+        self._hover_lbl_b = QLabel("")
+        self._hover_lbl_b.setFixedHeight(16)
+        self._hover_lbl_b.setStyleSheet(
+            "font-size:10px; color:#ffc850; background:#1a1a1a; padding:0 5px;"
+        )
+        b_lay.addWidget(self._hover_lbl_b)
         self._score_lbl_b = QLabel("")
         self._score_lbl_b.setWordWrap(True)
         self._score_lbl_b.setStyleSheet(
@@ -890,6 +1111,8 @@ class ABCompareDialog(QDialog):
         # Link crosshairs: hovering over one view moves the cursor in the other
         self._view_a.row_hovered.connect(self._view_b.set_crosshair_frac)
         self._view_b.row_hovered.connect(self._view_a.set_crosshair_frac)
+        self._view_a.row_hovered.connect(self._on_row_hovered_a)
+        self._view_b.row_hovered.connect(self._on_row_hovered_b)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
@@ -1095,9 +1318,11 @@ class ABCompareDialog(QDialog):
         if entry is None:
             self._preset_preview.clear()
             self._load_preset_btn.setEnabled(False)
+            self._delete_preset_btn.setEnabled(False)
         else:
             self._preset_preview.setPlainText(ab_presets.format_preview(entry))
             self._load_preset_btn.setEnabled(True)
+            self._delete_preset_btn.setEnabled(True)
 
     def _on_load_preset(self) -> None:
         """Load the currently previewed preset's params_b into the B form."""
@@ -1138,6 +1363,30 @@ class ABCompareDialog(QDialog):
         # Select the newly saved entry (index 1 = first real entry after placeholder)
         if self._preset_combo.count() > 1:
             self._preset_combo.setCurrentIndex(1)
+
+    def _on_delete_preset(self) -> None:
+        """Delete the currently selected preset after confirmation."""
+        idx = self._preset_combo.currentIndex()
+        entry = self._preset_combo.itemData(idx)
+        if entry is None:
+            return
+        from PySide6.QtWidgets import QMessageBox
+        desc = entry.get("description", "").strip() or "(no description)"
+        reply = QMessageBox.question(
+            self,
+            "Delete preset",
+            f"Delete preset:\n\n\"{desc}\"\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            ab_presets.delete_preset(entry["id"])
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete failed", str(exc))
+            return
+        self._refresh_preset_combo()
 
     def _on_copy_preset_json(self) -> None:
         """Copy current B params + description as a JSON snippet to clipboard."""
@@ -1358,12 +1607,26 @@ class ABCompareDialog(QDialog):
         """Render all tip rows from _multi_results for the current stage."""
         if not self._multi_results or not self._tip_row_widgets:
             return
-        idx = self._stage_combo.currentIndex()
+        combo_name = self._stage_combo.currentText()
+        combo_idx  = self._stage_combo.currentIndex()
         _CHART_W_TIP = 260
         _CHART_H_TIP = 130
 
         blank = QPixmap(_CHART_W_TIP, _CHART_H_TIP)
         blank.fill(QColor(26, 26, 26))
+
+        def _find_stage(stages):
+            """Find the stage matching the combo by name (positional fallback)."""
+            if not stages:
+                return None
+            for s in stages:
+                if s.name == combo_name:
+                    return s
+            # Fallback: use the last signal stage
+            for s in reversed(stages):
+                if s.signal is not None:
+                    return s
+            return None
 
         for result in self._multi_results:
             i = result["pipette_index"]
@@ -1372,19 +1635,20 @@ class ABCompareDialog(QDialog):
             lbl_a, lbl_b = self._tip_row_widgets[i]
 
             for lbl, stages in ((lbl_a, result["stages_a"]), (lbl_b, result["stages_b"])):
-                if stages and 0 <= idx < len(stages):
-                    stage = stages[idx]
-                    if stage.signal is not None:
-                        arr = _signal_pixmap_arr(
-                            stage.signal, stage.z_axis_px, stage.poi_z_px,
-                            w=_CHART_W_TIP, h=_CHART_H_TIP,
-                            line_thickness=self._line_thickness,
-                            log_scale=self._log_scale,
-                            show_poi=self._show_poi,
-                        )
-                        lbl.setPixmap(_ndarray_to_pixmap(arr))
-                    else:
-                        lbl.setPixmap(blank)
+                stage = _find_stage(stages)
+                # For image stages use the companion signal stage instead
+                if stage is not None and stage.signal is None:
+                    stage = next((s for s in stages if s.signal is not None), None)
+                if stage is not None and stage.signal is not None:
+                    arr = _signal_pixmap_arr(
+                        stage.signal, stage.z_axis_px, stage.poi_z_px,
+                        w=_CHART_W_TIP, h=_CHART_H_TIP,
+                        line_thickness=self._line_thickness,
+                        log_scale=self._log_scale,
+                        show_poi=self._show_poi,
+                        extra_signals=stage.extra_signals,
+                    )
+                    lbl.setPixmap(_ndarray_to_pixmap(arr))
                 else:
                     lbl.setPixmap(blank)
 
@@ -1401,21 +1665,27 @@ class ABCompareDialog(QDialog):
         self._run_btn.setEnabled(True)
 
     def _populate_stage_combo(self) -> None:
-        prev = self._stage_combo.currentIndex()
+        prev_name = self._stage_combo.currentText()
         self._stage_combo.blockSignals(True)
         self._stage_combo.clear()
-        # Use stage names from A; fall back to B if A is empty
-        names = (
-            [s.name for s in self._stages_a]
-            if self._stages_a else
-            [s.name for s in self._stages_b]
-        )
+        # Merge stage names from A and B (preserve order; union so stages that
+        # appear in only one panel — e.g. Gradient only in B — are still listed).
+        seen: set = set()
+        names: list = []
+        for s in list(self._stages_a) + list(self._stages_b):
+            if s.name not in seen:
+                seen.add(s.name)
+                names.append(s.name)
         for name in names:
             self._stage_combo.addItem(name)
         self._stage_combo.setEnabled(bool(names))
-        # Try to restore previous selection
-        new_idx = min(prev, len(names) - 1) if names else -1
-        if new_idx >= 0:
+        # Restore previous selection by name, then fall back to last item
+        new_idx = 0
+        if prev_name and prev_name in names:
+            new_idx = names.index(prev_name)
+        elif names:
+            new_idx = len(names) - 1
+        if names:
             self._stage_combo.setCurrentIndex(new_idx)
         self._stage_combo.blockSignals(False)
         self._render_current_stage()
@@ -1428,14 +1698,31 @@ class ABCompareDialog(QDialog):
         idx = self._stage_combo.currentIndex()
         alpha = self._overlay_slider.value() / 100.0
 
-        def _crop_src_for_stage(stages, src_override=None):
+        # Resolve per-panel stage index by matching the combo name first.
+        # This handles the case where A and B have different stage counts
+        # (e.g., B has an extra Gradient stage not present in A).
+        combo_name = self._stage_combo.currentText() if idx >= 0 else ""
+
+        def _resolve_idx(stages) -> int:
+            """Return the index of the stage whose name == combo_name, or idx."""
+            if not stages:
+                return idx
+            for i, s in enumerate(stages):
+                if s.name == combo_name:
+                    return i
+            return idx  # positional fallback if no name match
+
+        idx_a = _resolve_idx(self._stages_a)
+        idx_b = _resolve_idx(self._stages_b)
+
+        def _crop_src_for_stage(stages, stage_idx, src_override=None):
             """Crop the given source image using that stage's display_bbox."""
             src = src_override if src_override is not None else self._source_image
             if src is None:
                 return None
             bbox = None
-            if stages and 0 <= idx < len(stages):
-                bbox = stages[idx].metadata.get("display_bbox")
+            if stages and 0 <= stage_idx < len(stages):
+                bbox = stages[stage_idx].metadata.get("display_bbox")
             if bbox is None:
                 bbox = self._roi_bbox
             if bbox is None:
@@ -1447,18 +1734,21 @@ class ABCompareDialog(QDialog):
             y2 = min(src.shape[0], int(y + h))
             return src[y1:y2, x1:x2] if x2 > x1 and y2 > y1 else src
 
-        def _get_pixmap(stages, label):
-            if not stages or idx < 0 or idx >= len(stages):
+        def _get_pixmap(stages, stage_idx, label):
+            if not stages or stage_idx < 0 or stage_idx >= len(stages):
                 pm = QPixmap(320, 220)
                 pm.fill(QColor(30, 30, 30))
                 return pm
-            stage = stages[idx]
+            stage = stages[stage_idx]
+            # Companion signal stage: the first signal stage in this panel's
+            # list; used by image stages to show [image | chart] composite.
+            companion = next((s for s in stages if s.signal is not None), None)
             if stage.signal is not None:
                 # For signal stages: show the contrast-adjusted image in the
                 # left strip if use_contrast produced one; otherwise raw source.
                 contrast_img = (self._contrast_image_a if label == "A"
                                 else self._contrast_image_b)
-                src = _crop_src_for_stage(stages, contrast_img)
+                src = _crop_src_for_stage(stages, stage_idx, contrast_img)
                 # Signal stages handle ROI overlays inside _stage_to_pixmap so
                 # the polygon is restricted to the source-image portion of the
                 # composite.  _with_roi_overlays is bypassed for these.
@@ -1472,12 +1762,21 @@ class ABCompareDialog(QDialog):
                 )
             else:
                 # For image stages: overlay always uses the raw original.
-                src = _crop_src_for_stage(stages)
-            return _stage_to_pixmap(stage, src, alpha,
-                                    line_thickness=self._line_thickness)
+                # Also pass the companion signal stage so the chart is shown
+                # alongside the image (same [image | chart] layout).
+                src = _crop_src_for_stage(stages, stage_idx)
+                return _stage_to_pixmap(
+                    stage, src, alpha,
+                    line_thickness=self._line_thickness,
+                    show_roi1=self._chk_roi1.isChecked(),
+                    show_roi3=self._chk_roi2.isChecked(),
+                    log_scale=self._log_scale,
+                    show_poi=self._show_poi,
+                    companion_signal_stage=companion,
+                )
 
-        def _with_roi_overlays(stages, pm: QPixmap) -> QPixmap:
-            stage = stages[idx] if stages and 0 <= idx < len(stages) else None
+        def _with_roi_overlays(stages, stage_idx, pm: QPixmap) -> QPixmap:
+            stage = stages[stage_idx] if stages and 0 <= stage_idx < len(stages) else None
             if stage is None:
                 return pm
             # Signal stages already have their ROI polygon drawn inside
@@ -1516,10 +1815,75 @@ class ABCompareDialog(QDialog):
             painter.end()
             return pm
 
-        self._view_a.set_pixmap(_with_roi_overlays(self._stages_a, _get_pixmap(self._stages_a, "A")))
-        self._view_b.set_pixmap(_with_roi_overlays(self._stages_b, _get_pixmap(self._stages_b, "B")))
-        self._score_lbl_a.setText(_format_stage_info(self._stages_a, idx))
-        self._score_lbl_b.setText(_format_stage_info(self._stages_b, idx))
+        self._view_a.set_pixmap(_with_roi_overlays(self._stages_a, idx_a, _get_pixmap(self._stages_a, idx_a, "A")))
+        self._view_b.set_pixmap(_with_roi_overlays(self._stages_b, idx_b, _get_pixmap(self._stages_b, idx_b, "B")))
+        self._score_lbl_a.setText(_format_stage_info(self._stages_a, idx_a))
+        self._score_lbl_b.setText(_format_stage_info(self._stages_b, idx_b))
+        # Stash current signal stage for hover readout
+        self._hover_stage_a = (self._stages_a[idx_a]
+                               if self._stages_a and 0 <= idx_a < len(self._stages_a)
+                               else None)
+        self._hover_stage_b = (self._stages_b[idx_b]
+                               if self._stages_b and 0 <= idx_b < len(self._stages_b)
+                               else None)
+        self._hover_lbl_a.setText("")
+        self._hover_lbl_b.setText("")
+
+    # ── Hover readout ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _interp_signal(stage: Optional["DebugStage"], frac: float) -> Optional[float]:
+        """Interpolate the signal value at the given scene fraction (0–1)."""
+        if stage is None or stage.signal is None or len(stage.signal) < 2:
+            return None
+        sig = stage.signal
+        n = len(sig)
+        z_axis = stage.z_axis_px
+        if z_axis is not None and len(z_axis) >= 2:
+            z_min, z_max = float(z_axis[0]), float(z_axis[-1])
+        else:
+            z_min, z_max = 0.0, float(n - 1)
+        if z_max == z_min:
+            return float(sig[0])
+        z_px = z_min + frac * (z_max - z_min)
+        idx = (z_px - z_min) / (z_max - z_min) * (n - 1)
+        i0 = max(0, min(int(idx), n - 2))
+        t = idx - i0
+        return float(sig[i0] * (1.0 - t) + sig[i0 + 1] * t)
+
+    def _on_row_hovered_a(self, frac: float) -> None:
+        if frac < 0:
+            self._hover_lbl_a.setText("")
+            return
+        val = self._interp_signal(self._hover_stage_a, frac)
+        if val is None:
+            self._hover_lbl_a.setText("")
+            return
+        stage = self._hover_stage_a
+        z_axis = stage.z_axis_px if stage else None
+        if z_axis is not None and len(z_axis) >= 2:
+            z_px = float(z_axis[0]) + frac * (float(z_axis[-1]) - float(z_axis[0]))
+        else:
+            n = len(stage.signal) if stage and stage.signal is not None else 1
+            z_px = frac * (n - 1)
+        self._hover_lbl_a.setText(f"Row {int(round(z_px))}  ·  {val:.4g}")
+
+    def _on_row_hovered_b(self, frac: float) -> None:
+        if frac < 0:
+            self._hover_lbl_b.setText("")
+            return
+        val = self._interp_signal(self._hover_stage_b, frac)
+        if val is None:
+            self._hover_lbl_b.setText("")
+            return
+        stage = self._hover_stage_b
+        z_axis = stage.z_axis_px if stage else None
+        if z_axis is not None and len(z_axis) >= 2:
+            z_px = float(z_axis[0]) + frac * (float(z_axis[-1]) - float(z_axis[0]))
+        else:
+            n = len(stage.signal) if stage and stage.signal is not None else 1
+            z_px = frac * (n - 1)
+        self._hover_lbl_b.setText(f"Row {int(round(z_px))}  ·  {val:.4g}")
 
     # ── State save / restore ────────────────────────────────────────────────
 

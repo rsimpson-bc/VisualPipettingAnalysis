@@ -88,6 +88,14 @@ class RowContrastExtractor(BaseExtractor):
                 lambda: ip.accumulate_ab(image_set.frames),
             )
         else:
+            # Cache the pre-grayscale (potentially contrast-modified) frame so
+            # the debug collector can display it as a separate stage.
+            if params.get("use_contrast", False) and image_set.frames:
+                _frame0 = image_set.frames[0]
+                cache.get_or_compute(
+                    image_set.pipette_index, "contrast_frame", {},
+                    lambda: _frame0,
+                )
             working = cache.get_or_compute(
                 image_set.pipette_index, "to_grayscale_frame0", {},
                 lambda: ip.to_grayscale(image_set.frames[0]),
@@ -154,6 +162,7 @@ class RowContrastExtractor(BaseExtractor):
 
         # Step 5: per-row stat → 1-D signal
         stat = params.get("stat", "std")
+        _band_signals_out = None  # populated only by peak_count_bands_h
 
         if stat in ("std_v", "variance_v"):
             # Vertical: sliding-window std of per-row mean along the z-axis.
@@ -200,11 +209,16 @@ class RowContrastExtractor(BaseExtractor):
                 vert_std[~row_valid] = 0.0
 
             signal = vert_std ** 2 if stat == "variance_v" else vert_std
-        elif stat in ("peak_count_h", "peak_prominence_sum_h"):
+        elif stat in (
+            "peak_count_h", "peak_prominence_sum_h",
+            "peak_prominence_mean_h", "peak_width_mean_h",
+            "peak_count_bands_h",
+        ):
             # Horizontal peak analysis: per-row find_peaks on valid pixels only.
-            from scipy.signal import find_peaks
+            from scipy.signal import find_peaks, peak_widths as _peak_widths
             min_dist  = max(1, int(params.get("peak_min_distance", 5)))
             min_prom  = float(params.get("peak_min_prominence", 5.0))
+            max_prom  = float(params.get("peak_max_prominence", 0.0))  # 0 = disabled
             width_exp = float(params.get("peak_width_exponent", 0.5))
 
             # Per-row valid width from polygon mask (cached by polygon identity)
@@ -224,6 +238,45 @@ class RowContrastExtractor(BaseExtractor):
             row_widths = np.maximum(1.0, row_widths)
             norm_factors = row_widths ** width_exp if width_exp > 0.0 else np.ones(n_rows, dtype=np.float32)
 
+            # --- Band setup for peak_count_bands_h ---
+            _BAND_PALETTE = [
+                "#4444aa",  # 0–5   dark blue
+                "#2277cc",  # 5–10  blue
+                "#22aaaa",  # 10–15 teal
+                "#22cc66",  # 15–20 green
+                "#99cc22",  # 20–25 yellow-green
+                "#ddcc00",  # 25–30 yellow
+                "#ffaa00",  # 30–35 amber
+                "#ff6600",  # 35–40 orange
+                "#ff2200",  # 40–45 red-orange
+                "#cc0033",  # 45–50 crimson
+                "#8800cc",  # >50   purple
+            ]
+            band_edges: list = []
+            band_arrays: list = []
+            band_meta: list = []
+            if stat == "peak_count_bands_h":
+                raw_edges = params.get(
+                    "peak_band_edges",
+                    [5, 10, 15, 20, 25, 30, 35, 40, 45, 50],
+                )
+                if isinstance(raw_edges, (list, tuple)) and len(raw_edges) > 0:
+                    band_edges = sorted(float(e) for e in raw_edges)
+                else:
+                    band_edges = [10.0, 25.0, 50.0]
+                # N edges → N+1 bands
+                n_bands = len(band_edges) + 1
+                band_arrays = [np.zeros(n_rows, dtype=np.float32) for _ in range(n_bands)]
+                for bi in range(n_bands):
+                    lo = min_prom if bi == 0 else band_edges[bi - 1]
+                    hi = band_edges[bi] if bi < len(band_edges) else None
+                    if hi is None:
+                        label = f"≥{lo:.4g}"
+                    else:
+                        label = f"{lo:.4g}–{hi:.4g}"
+                    color = _BAND_PALETTE[bi % len(_BAND_PALETTE)]
+                    band_meta.append({"label": label, "color": color, "lo": lo, "hi": hi})
+
             out = np.empty(n_rows, dtype=np.float32)
             for i in range(n_rows):
                 # Use only pixels inside the polygon for this row
@@ -234,16 +287,89 @@ class RowContrastExtractor(BaseExtractor):
                 if len(row_data) < 2:
                     out[i] = 0.0
                     continue
+
+                # For band stat: find all peaks above the global floor; apply
+                # max_prom filter; then slice into bands below.
+                find_prom_arg = min_prom
+                if stat == "peak_count_bands_h":
+                    find_prom_arg = min_prom  # floor only; bands handle upper bound
+
                 peaks, props = find_peaks(
-                    row_data,
+                    row_data.astype(float),
                     distance=min_dist,
-                    prominence=min_prom,
+                    prominence=find_prom_arg,
                 )
+
+                # Apply upper prominence bound if set (non-band stats)
+                if max_prom > 0.0 and stat != "peak_count_bands_h" and len(peaks) > 0:
+                    keep = props["prominences"] <= max_prom
+                    peaks = peaks[keep]
+                    props = {k: v[keep] for k, v in props.items()}
+
+                nf = norm_factors[i]
+
                 if stat == "peak_count_h":
-                    out[i] = len(peaks) / norm_factors[i]
-                else:
-                    out[i] = float(props["prominences"].sum()) / norm_factors[i]
+                    out[i] = len(peaks) / nf
+                elif stat == "peak_prominence_sum_h":
+                    out[i] = float(props["prominences"].sum()) / nf
+                elif stat == "peak_prominence_mean_h":
+                    out[i] = (float(props["prominences"].mean()) / nf
+                              if len(peaks) > 0 else 0.0)
+                elif stat == "peak_width_mean_h":
+                    if len(peaks) > 0:
+                        widths, _, _, _ = _peak_widths(
+                            row_data.astype(float), peaks,
+                            rel_height=0.5,
+                            prominence_data=(
+                                props["prominences"],
+                                props["left_bases"],
+                                props["right_bases"],
+                            ),
+                        )
+                        out[i] = float(widths.mean()) / nf
+                    else:
+                        out[i] = 0.0
+                elif stat == "peak_count_bands_h":
+                    proms = props["prominences"] if len(peaks) > 0 else np.array([])
+                    # Apply max_prom global cap if set
+                    if max_prom > 0.0 and len(proms) > 0:
+                        keep = proms <= max_prom
+                        proms = proms[keep]
+                    total = 0.0
+                    for bi, bm in enumerate(band_meta):
+                        lo, hi = bm["lo"], bm["hi"]
+                        if len(proms) > 0:
+                            mask = proms >= lo
+                            if hi is not None:
+                                mask &= proms < hi
+                            cnt = float(mask.sum())
+                        else:
+                            cnt = 0.0
+                        band_arrays[bi][i] = cnt / nf
+                        total += cnt
+                    out[i] = total / nf
+
             signal = out
+
+            # Attach band data to features via a side-channel attribute
+            # (set after RawFeatures is built, below)
+            _band_signals_out = None
+            if stat == "peak_count_bands_h" and band_meta:
+                # Convert raw band counts to proportions of total for the
+                # color-distribution visualization.  Both band_arrays[bi][r]
+                # and out[r] are divided by the same nf factor, so the fractions
+                # are simply band_arrays[bi][r] / out[r] = count_bi / total.
+                frac_arrays = [
+                    np.where(out > 0,
+                             band_arrays[bi] / np.maximum(out, 1e-9),
+                             0.0).astype(np.float32)
+                    for bi in range(len(band_meta))
+                ]
+                _band_signals_out = [
+                    {"signal": frac_arrays[bi], "label": bm["label"],
+                     "color": bm["color"], "viz": "band_distribution"}
+                    for bi, bm in enumerate(band_meta)
+                ]
         elif stat == "variance":
             signal = _masked_arr().var(axis=1).filled(0).astype(np.float32)
         else:  # "std" (default)
@@ -258,9 +384,12 @@ class RowContrastExtractor(BaseExtractor):
 
         z_axis = np.arange(len(signal))
 
-        return RawFeatures(
+        raw = RawFeatures(
             mode="RowContrastExtractor",
             pipette_index=image_set.pipette_index,
             z_axis_px=z_axis,
             intensity_signal=signal,
         )
+        if _band_signals_out is not None:
+            raw.band_signals = _band_signals_out
+        return raw

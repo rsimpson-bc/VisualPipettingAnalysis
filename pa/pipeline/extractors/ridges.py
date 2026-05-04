@@ -136,6 +136,21 @@ class RidgeExtractor(BaseExtractor):
                 ridge_mask = cv2.morphologyEx(ridge_mask, cv2.MORPH_OPEN, kernel,
                                               iterations=n_iter)
 
+        # ── 7b. Polygon mask — zero out pixels outside the ROI polygon ────────
+        # The bounding-box crop above gives a rectangular working image; apply
+        # the polygon to exclude corner regions outside the calibrated shape.
+        if image_set.roi_points and image_set.roi:
+            ox = int(image_set.roi[0])
+            oy = int(image_set.roi[1])
+            local_pts = np.array(
+                [[int(round(p[0] - ox)), int(round(p[1] - oy))]
+                 for p in image_set.roi_points],
+                dtype=np.int32,
+            )
+            poly_m = np.zeros(ridge_mask.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(poly_m, [local_pts], 255)
+            ridge_mask = cv2.bitwise_and(ridge_mask, poly_m)
+
         # ── 8. Compute all four 1-D signals ───────────────────────────────────
         height = ridge_mask.shape[0]
         band_h = p.get("band_height", p.get("correlation_window", 10))
