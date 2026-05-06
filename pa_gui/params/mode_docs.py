@@ -67,11 +67,12 @@ class ModeDocsView(QTextBrowser):
     def show_mode(self, mode_name: str) -> None:
         """Load and render the doc for *mode_name*."""
         md = load_mode_doc(mode_name)
-        # Anchor the document at the docs directory so relative image paths
-        # resolve correctly.  Setting source clears the document, so we set
-        # source first and then setMarkdown.
-        anchor = QUrl.fromLocalFile(os.path.join(_DOCS_DIR, "_anchor.md"))
-        self.setSource(anchor)
+        # Set the base URL on the document so relative image paths (e.g.
+        # ``img/foo.png``) resolve against docs/modes/ without trying to load
+        # a real file (which caused the "No document for file://_anchor.md"
+        # warning when using setSource()).
+        base_url = QUrl.fromLocalFile(_DOCS_DIR + os.sep)
+        self.document().setBaseUrl(base_url)
         if md is None:
             self.setMarkdown(f"# {mode_name or 'Unknown mode'}\n\n{self._PLACEHOLDER}")
         else:

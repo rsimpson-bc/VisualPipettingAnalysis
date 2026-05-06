@@ -309,37 +309,69 @@ def collect_ridge_stages(
             },
         ))
 
-    # ── Ridge Mask stage ─────────────────────────────────────────────────────
+    # ── Working image stage (Ridge Mask or Float Working Image) ─────────────
+    use_ridges = bool(params.get("use_ridges", True))
     if features.edge_map is not None:
-        stages.append(DebugStage(
-            name="Ridge Mask",
-            mode_name=mode_name,
-            pipette_index=pipette_index,
-            image=features.edge_map,  # already in ROI-local coords, no re-crop
-            description=(
+        if use_ridges:
+            img_stage_name = "Ridge Mask"
+            img_stage_desc = (
                 f"Binary ridge mask after orientation filter "
                 f"(±{params.get('angle_tolerance', 30)}°) and morphology."
-            ),
-            metadata={
+            )
+            img_stage_meta = {
                 **base_img_meta,
                 "ridge_threshold": params.get("ridge_threshold", 30),
                 "morph_close":     params.get("morph_close_enabled", True),
                 "morph_open":      params.get("morph_open_enabled", True),
-            },
+            }
+        else:
+            _gm = params.get("gradient_method", "x")
+            img_stage_name = "Working Image"
+            img_stage_desc = (
+                f"Continuous float working image used for band analysis "
+                f"(use_ridges=False). "
+                f"Gradient: {_gm}, normalised to 0–255 for display."
+            )
+            img_stage_meta = {
+                **base_img_meta,
+                "gradient_method": _gm,
+            }
+        stages.append(DebugStage(
+            name=img_stage_name,
+            mode_name=mode_name,
+            pipette_index=pipette_index,
+            image=features.edge_map,  # already in ROI-local coords, no re-crop
+            description=img_stage_desc,
+            metadata=img_stage_meta,
         ))
 
     # 1D signal
     poi_z = [p.z_px for p in poi_list]
-    _signal_labels = {
-        "LineContinuity_Terminations": ("Termination Signal",
-            "Per-row ridge termination count. Peaks = structural change."),
-        "LineContinuity_PatternChange": ("Pattern Change Signal",
-            "Per-row ridge spacing change. Peaks = pattern discontinuity."),
-        "LineContinuity_Correlation": ("Correlation Signal",
-            "Per-row cross-band correlation. Troughs = structural gap."),
-        "LineContinuity_Density": ("Density Signal",
-            "Per-row ridge density. Peaks = density anomaly."),
-    }
+    if use_ridges:
+        _signal_labels = {
+            "LineContinuity_Terminations": ("Termination Signal",
+                "Per-row ridge termination count. Peaks = structural change."),
+            "LineContinuity_PatternChange": ("Pattern Change Signal",
+                "Per-row ridge spacing change. Peaks = pattern discontinuity."),
+            "LineContinuity_Correlation": ("Correlation Signal",
+                "Per-row cross-band correlation. Troughs = structural gap."),
+            "LineContinuity_Density": ("Density Signal",
+                "Per-row ridge density. Peaks = density anomaly."),
+        }
+    else:
+        _signal_labels = {
+            "LineContinuity_Terminations": ("Termination Signal",
+                "Terminations not computed when use_ridges=False (signal is zero)."),
+            "LineContinuity_PatternChange": ("Pattern Change Signal",
+                "Per-row L1-norm difference between adjacent bands (float image). "
+                "Peaks = intensity pattern discontinuity."),
+            "LineContinuity_Correlation": ("Correlation Signal",
+                "Per-row Pearson correlation between adjacent float bands. "
+                "Troughs (low correlation) = structural gap."),
+            "LineContinuity_Density": ("Density Signal",
+                "Per-row column-std energy difference between adjacent bands. "
+                "Peaks = vertical texture anomaly."),
+        }
     label, desc = _signal_labels.get(
         mode_name, (f"{mode_name} Signal", "Mode 1-D output signal."))
     stages.append(DebugStage(

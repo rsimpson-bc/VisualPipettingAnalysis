@@ -136,7 +136,19 @@
       "default": 0,
       "description": "Expand (positive) or contract (negative) the calibrated ROI polygon outward by this many pixels before computing the signal. Negative values shave off the outer edges — useful for excluding tip-wall artefacts. 0 = use calibrated ROI exactly."
     },
-
+    "_group_signal_mask": { "type": "string", "const": "--- Signal Masking ---" },
+    "ignore_top_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the top of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
+    "ignore_bottom_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the bottom of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
     "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
     "use_contrast": {
       "type": "boolean",

@@ -158,6 +158,12 @@ class PipelineConfigEditor(QWidget):
         self._ab_btn.setVisible(False)
         self._ab_btn.clicked.connect(self._on_open_ab_compare)
         bottom.addWidget(self._ab_btn)
+        self._mode_compare_btn = QPushButton("Mode Compare…")
+        self._mode_compare_btn.setToolTip("Compare multiple saved presets for this mode side by side.")
+        self._mode_compare_btn.setEnabled(False)
+        self._mode_compare_btn.setVisible(False)
+        self._mode_compare_btn.clicked.connect(self._on_open_mode_compare)
+        bottom.addWidget(self._mode_compare_btn)
         btn_revert = QPushButton("Revert")
         btn_revert.setToolTip("Discard unsaved changes and reload from file.")
         btn_revert.clicked.connect(self._on_revert)
@@ -300,6 +306,8 @@ class PipelineConfigEditor(QWidget):
 
         self._ab_btn.setVisible(True)
         self._ab_btn.setEnabled(True)
+        self._mode_compare_btn.setVisible(True)
+        self._mode_compare_btn.setEnabled(True)
 
         # Update the docs tab to match the selected mode
         self._docs_view.show_mode(mode_name)
@@ -368,6 +376,8 @@ class PipelineConfigEditor(QWidget):
         self._enabled_chk.setVisible(False)
         self._ab_btn.setVisible(False)
         self._ab_btn.setEnabled(False)
+        self._mode_compare_btn.setVisible(False)
+        self._mode_compare_btn.setEnabled(False)
         # Remove every widget in the Parameters tab except the placeholder.
         for i in reversed(range(self._params_tab_layout.count())):
             item = self._params_tab_layout.itemAt(i)
@@ -441,6 +451,25 @@ class PipelineConfigEditor(QWidget):
             if obj in self._ab_dialogs else None
         )
         self._ab_dialogs.append(dlg)
+        dlg.show()
+
+    def _on_open_mode_compare(self) -> None:
+        """Open a non-modal Mode Compare window for the currently selected mode."""
+        if self._current_item_key is None:
+            return
+        pipeline_name, key = self._current_item_key
+        if key == "integrator":
+            return
+        self._commit_current_form()
+        mode_cfg  = self._config["pipelines"][pipeline_name]["modes"][int(key)]
+        mode_name = mode_cfg.get("mode_name", "")
+        from pa_gui.analysis.mode_compare_dialog import ModeCompareDialog
+        dlg = ModeCompareDialog(
+            mode_name,
+            instrument_config_path=self._instrument_config_path or "",
+            parent=self,
+        )
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()
 
     def _apply_ab_params(

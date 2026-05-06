@@ -41,7 +41,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QGroupBox,
-    QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
     QVBoxLayout, QWidget,
 )
@@ -70,18 +70,21 @@ class _ZoomableView(QGraphicsView):
     # Value is a 0.0–1.0 fraction of scene height; -1.0 on leave.
     row_hovered: Signal = Signal(float)
 
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, parent=None, stretch_fit: bool = False):
         super().__init__(parent)
         self._title = title
+        self._stretch_fit = stretch_fit
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        if not stretch_fit:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(QColor(18, 18, 18))
         self.setMouseTracking(True)
-        self._crosshair_item = None
+        self._crosshair_item = None    # horizontal line — synced across views
+        self._crosshair_v_item = None  # vertical line   — local to this view
         self._user_zoomed = False
         self._show_placeholder()
 
@@ -100,17 +103,20 @@ class _ZoomableView(QGraphicsView):
 
     def set_pixmap(self, pm: QPixmap):
         self._scene.clear()
-        self._crosshair_item = None   # cleared with scene
+        self._crosshair_item = None    # cleared with scene
+        self._crosshair_v_item = None  # cleared with scene
         self._user_zoomed = False     # reset zoom tracking on new image
         self.resetTransform()
         self._scene.addPixmap(pm)
         self._scene.setSceneRect(QRectF(pm.rect()))
-        self.fitInView(self._scene.sceneRect(),
-                       Qt.AspectRatioMode.KeepAspectRatio)
+        mode = (Qt.AspectRatioMode.IgnoreAspectRatio
+                if self._stretch_fit
+                else Qt.AspectRatioMode.KeepAspectRatio)
+        self.fitInView(self._scene.sceneRect(), mode)
 
     def set_crosshair_frac(self, frac: float) -> None:
-        """Draw a dashed horizontal crosshair at *frac* (0–1) of scene height.
-        Pass frac < 0 to clear."""
+        """Draw a dashed horizontal line at *frac* (0–1) of scene height.
+        Pass frac < 0 to clear. Called externally for cross-view sync."""
         if self._crosshair_item is not None:
             try:
                 self._scene.removeItem(self._crosshair_item)
@@ -131,14 +137,41 @@ class _ZoomableView(QGraphicsView):
         self._scene.addItem(item)
         self._crosshair_item = item
 
+    def set_col_crosshair_frac(self, frac: float) -> None:
+        """Draw a dashed vertical line at *frac* (0–1) of scene width.
+        Pass frac < 0 to clear. Local to this view only."""
+        if self._crosshair_v_item is not None:
+            try:
+                self._scene.removeItem(self._crosshair_v_item)
+            except RuntimeError:
+                pass
+            self._crosshair_v_item = None
+        if frac < 0:
+            return
+        sr = self._scene.sceneRect()
+        if not sr.isValid():
+            return
+        from PySide6.QtWidgets import QGraphicsLineItem
+        x = sr.left() + frac * sr.width()
+        pen = QPen(QColor(255, 160, 0), 0)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        item = QGraphicsLineItem(x, sr.top(), x, sr.bottom())
+        item.setPen(pen)
+        self._scene.addItem(item)
+        self._crosshair_v_item = item
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Only auto-fit while the user hasn't manually zoomed
         if not self._user_zoomed and self._scene.sceneRect().isValid():
-            self.fitInView(self._scene.sceneRect(),
-                           Qt.AspectRatioMode.KeepAspectRatio)
+            mode = (Qt.AspectRatioMode.IgnoreAspectRatio
+                    if self._stretch_fit
+                    else Qt.AspectRatioMode.KeepAspectRatio)
+            self.fitInView(self._scene.sceneRect(), mode)
 
     def wheelEvent(self, event):
+        if self._stretch_fit:
+            event.ignore()
+            return
         self._user_zoomed = True
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self.scale(factor, factor)
@@ -146,16 +179,48 @@ class _ZoomableView(QGraphicsView):
     def mouseMoveEvent(self, event):
         sr = self._scene.sceneRect()
         if sr.isValid() and sr.height() > 0:
-            scene_y = self.mapToScene(event.pos()).y()
-            frac = max(0.0, min(1.0, (scene_y - sr.top()) / sr.height()))
+            scene_pos = self.mapToScene(event.pos())
+            frac = max(0.0, min(1.0, (scene_pos.y() - sr.top()) / sr.height()))
+            col_frac = (max(0.0, min(1.0, (scene_pos.x() - sr.left()) / sr.width()))
+                        if sr.width() > 0 else 0.0)
             self.set_crosshair_frac(frac)
+            self.set_col_crosshair_frac(col_frac)
             self.row_hovered.emit(frac)
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         self.set_crosshair_frac(-1.0)
+        self.set_col_crosshair_frac(-1.0)
         self.row_hovered.emit(-1.0)
         super().leaveEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Right-click menu: copy the current scene pixmap to the clipboard."""
+        # Grab the pixmap from the first item in the scene (the composite
+        # image+chart that was last set via set_pixmap).
+        items = self._scene.items()
+        pixmap: Optional[QPixmap] = None
+        for item in items:
+            from PySide6.QtWidgets import QGraphicsPixmapItem as _GPI
+            if isinstance(item, _GPI):
+                pixmap = item.pixmap()
+                break
+        if pixmap is None or pixmap.isNull():
+            return
+        menu = QMenu(self)
+        act_copy = menu.addAction("Copy image")
+        act_save = menu.addAction("Save image as…")
+        chosen = menu.exec(event.globalPos())
+        if chosen == act_copy:
+            QApplication.clipboard().setPixmap(pixmap)
+        elif chosen == act_save:
+            from PySide6.QtWidgets import QFileDialog as _QFD
+            path, _ = _QFD.getSaveFileName(
+                self, "Save image", "",
+                "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;All files (*)",
+            )
+            if path:
+                pixmap.save(path)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +250,7 @@ def _band_distribution_arr(
     h: int,
     line_thickness: int,
     show_poi: bool,
+    z_range_override: Optional[tuple] = None,
 ) -> np.ndarray:
     """Render peak_count_bands_h as a per-row horizontal color distribution strip.
 
@@ -208,8 +274,12 @@ def _band_distribution_arr(
         except Exception:
             band_colors.append((128, 128, 128))
 
-    z_min = float(z_axis[0])  if z_axis is not None and len(z_axis) >= 2 else 0.0
-    z_max = float(z_axis[-1]) if z_axis is not None and len(z_axis) >= 2 else float(n - 1)
+    if z_range_override is not None:
+        z_min, z_max = float(z_range_override[0]), float(z_range_override[1])
+    elif z_axis is not None and len(z_axis) >= 2:
+        z_min, z_max = float(z_axis[0]), float(z_axis[-1])
+    else:
+        z_min, z_max = 0.0, float(n - 1)
 
     # Reserve right-side legend panel so it doesn't overlap the strip.
     # Use a fixed per-character estimate (cv2 can't measure text precisely).
@@ -278,6 +348,7 @@ def _signal_pixmap_arr(
     log_scale: bool = False,
     show_poi: bool = True,
     extra_signals: Optional[List[dict]] = None,
+    z_range_override: Optional[tuple] = None,
 ) -> np.ndarray:
     """Return a BGR numpy array (h, w, 3) of the horizontal signal chart."""
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
@@ -289,7 +360,8 @@ def _signal_pixmap_arr(
             and len(extra_signals) > 0
             and extra_signals[0].get("viz") == "band_distribution"):
         return _band_distribution_arr(
-            signal, z_axis, poi_z, extra_signals, w, h, line_thickness, show_poi
+            signal, z_axis, poi_z, extra_signals, w, h, line_thickness, show_poi,
+            z_range_override=z_range_override,
         )
 
     mn, mx = float(signal.min()), float(signal.max())
@@ -314,7 +386,9 @@ def _signal_pixmap_arr(
         norm = (signal - mn) / (mx - mn)
     n = len(norm)
 
-    if z_axis is not None and len(z_axis) >= 2:
+    if z_range_override is not None:
+        z_min, z_max = float(z_range_override[0]), float(z_range_override[1])
+    elif z_axis is not None and len(z_axis) >= 2:
         z_min, z_max = float(z_axis[0]), float(z_axis[-1])
     else:
         z_min, z_max = 0.0, float(n - 1)
@@ -754,6 +828,18 @@ class ABCompareDialog(QDialog):
         )
         self._pipette_spin.valueChanged.connect(self._on_pipette_changed)
         src_row.addWidget(self._pipette_spin)
+
+        # Quick-select buttons 1–8
+        self._pipette_btns: list[QPushButton] = []
+        for _i in range(1, 9):
+            _btn = QPushButton(str(_i))
+            _btn.setFixedSize(22, 22)
+            _btn.setCheckable(False)
+            _btn.setToolTip(f"Select pipette {_i}")
+            _btn.clicked.connect(lambda _checked, n=_i: self._on_pipette_btn_clicked(n))
+            src_row.addWidget(_btn)
+            self._pipette_btns.append(_btn)
+        self._refresh_pipette_buttons()
 
         src_row.addSpacing(8)
         src_row.addWidget(QLabel("Tip type:"))
@@ -1280,6 +1366,7 @@ class ABCompareDialog(QDialog):
 
     def _on_pipette_changed(self) -> None:
         """Pipette index or tip type changed — schedule a re-run."""
+        self._refresh_pipette_buttons()
         if self._image_paths:
             self._schedule_run()
 
@@ -1436,10 +1523,32 @@ class ABCompareDialog(QDialog):
         self._show_poi = bool(state)
         self._render_current_stage()
 
+    def _on_pipette_btn_clicked(self, n: int) -> None:
+        """Jump to pipette *n* when a quick-select button is clicked."""
+        self._pipette_spin.setValue(n)  # triggers valueChanged → _on_pipette_changed
+
+    def _refresh_pipette_buttons(self) -> None:
+        """Highlight the button matching the current spinbox value; clear the rest."""
+        current = self._pipette_spin.value()
+        for i, btn in enumerate(self._pipette_btns, start=1):
+            if i == current:
+                btn.setStyleSheet(
+                    "QPushButton { background:#2a5f9e; color:white; font-weight:bold;"
+                    " border:1px solid #4a8fd8; border-radius:3px; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background:#2d2d2d; color:#ccc;"
+                    " border:1px solid #555; border-radius:3px; }"
+                    "QPushButton:hover { background:#3d3d3d; }"
+                )
+
     def _on_all_tips_toggled(self, state: int) -> None:
         """Switch between single-tip and all-tips display modes."""
         enabled = bool(state)
         self._pipette_spin.setEnabled(not enabled)
+        for btn in self._pipette_btns:
+            btn.setEnabled(not enabled)
         self._views_splitter.setVisible(not enabled)
         self._all_tips_scroll.setVisible(enabled)
         self._schedule_run()

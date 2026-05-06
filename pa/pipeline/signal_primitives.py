@@ -136,6 +136,34 @@ def find_troughs(
 
 
 # ---------------------------------------------------------------------------
+# Edge masking
+# ---------------------------------------------------------------------------
+
+def mask_signal_edges(
+    signal: np.ndarray,
+    ignore_top: int = 0,
+    ignore_bottom: int = 0,
+) -> np.ndarray:
+    """
+    Return a copy of *signal* with the first *ignore_top* and last
+    *ignore_bottom* elements forced to zero.
+
+    This is applied after all per-row feature extraction and before POI
+    detection so that the signal chart shows 0 at the masked positions and
+    no peaks can be found there.
+    """
+    if ignore_top <= 0 and ignore_bottom <= 0:
+        return signal
+    out = signal.copy()
+    n = len(out)
+    if ignore_top > 0:
+        out[:min(ignore_top, n)] = 0.0
+    if ignore_bottom > 0:
+        out[max(0, n - ignore_bottom):] = 0.0
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Multi-frame statistics
 # ---------------------------------------------------------------------------
 

@@ -173,6 +173,20 @@
       "description": "Polynomial degree — only used when detrend_method = 'polynomial'."
     },
 
+    "_group_signal_mask": { "type": "string", "const": "--- Signal Masking ---" },
+    "ignore_top_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the top of the ROI to force to zero in both output signals. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
+    "ignore_bottom_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the bottom of the ROI to force to zero in both output signals. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
+
     "_group_interpreter": { "type": "string", "const": "--- Interpreter thresholds ---" },
     "trough_threshold": {
       "type": "number",

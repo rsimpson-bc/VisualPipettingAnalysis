@@ -19,6 +19,7 @@ from pa.pipeline.cache import ProcessedImageCache
 from pa.pipeline.modes.base import BaseLiquidMode
 from pa.pipeline.extractors.row_contrast import RowContrastExtractor
 from pa.pipeline import image_primitives as ip
+from pa.pipeline import signal_primitives as sp
 
 
 def _apply_contrast(image_set: ImageSet, params: dict) -> ImageSet:
@@ -73,11 +74,16 @@ class RowContrastDetection(BaseLiquidMode):
             _apply_contrast(image_set, self.params), self.params
         )
         features = RowContrastExtractor(self.params).extract(prepared, cache)
+        _sig = sp.mask_signal_edges(
+            features.intensity_signal,
+            ignore_top=int(self.params.get("ignore_top_rows", 0) or 0),
+            ignore_bottom=int(self.params.get("ignore_bottom_rows", 0) or 0),
+        )
         return ZProfile(
             mode="RowContrastDetection",
             pipette_index=image_set.pipette_index,
             z_axis_px=features.z_axis_px,
-            signal=features.intensity_signal,
+            signal=_sig,
         )
 
     def run_debug(self, image_set: ImageSet, cache: ProcessedImageCache):
@@ -85,10 +91,15 @@ class RowContrastDetection(BaseLiquidMode):
             _apply_contrast(image_set, self.params), self.params
         )
         features = RowContrastExtractor(self.params).extract(prepared, cache)
+        _sig = sp.mask_signal_edges(
+            features.intensity_signal,
+            ignore_top=int(self.params.get("ignore_top_rows", 0) or 0),
+            ignore_bottom=int(self.params.get("ignore_bottom_rows", 0) or 0),
+        )
         profile = ZProfile(
             mode="RowContrastDetection",
             pipette_index=image_set.pipette_index,
             z_axis_px=features.z_axis_px,
-            signal=features.intensity_signal,
+            signal=_sig,
         )
         return profile, features

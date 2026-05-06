@@ -13,6 +13,7 @@ from pa.pipeline.cache import ProcessedImageCache
 from pa.pipeline.modes.base import BaseLiquidMode
 from pa.pipeline.extractors.intensity import IntensityExtractor
 from pa.pipeline import image_primitives as ip
+from pa.pipeline import signal_primitives as sp
 
 
 def _apply_contrast(image_set: ImageSet, params: dict) -> ImageSet:
@@ -84,11 +85,16 @@ class IntensityDetection(BaseLiquidMode):
             _apply_contrast(image_set, self.params), self.params
         )
         features = IntensityExtractor(self.params).extract(prepared, cache)
+        _sig = sp.mask_signal_edges(
+            features.intensity_signal,
+            ignore_top=int(self.params.get("ignore_top_rows", 0) or 0),
+            ignore_bottom=int(self.params.get("ignore_bottom_rows", 0) or 0),
+        )
         return ZProfile(
             mode="IntensityDetection",
             pipette_index=image_set.pipette_index,
             z_axis_px=features.z_axis_px,
-            signal=features.intensity_signal,
+            signal=_sig,
         )
 
     def run_debug(self, image_set, cache):
@@ -96,7 +102,12 @@ class IntensityDetection(BaseLiquidMode):
             _apply_contrast(image_set, self.params), self.params
         )
         features = IntensityExtractor(self.params).extract(prepared, cache)
+        _sig = sp.mask_signal_edges(
+            features.intensity_signal,
+            ignore_top=int(self.params.get("ignore_top_rows", 0) or 0),
+            ignore_bottom=int(self.params.get("ignore_bottom_rows", 0) or 0),
+        )
         profile = ZProfile(mode="IntensityDetection",
                            pipette_index=image_set.pipette_index,
-                           z_axis_px=features.z_axis_px, signal=features.intensity_signal)
+                           z_axis_px=features.z_axis_px, signal=_sig)
         return profile, features

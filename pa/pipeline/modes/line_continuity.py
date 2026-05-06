@@ -14,6 +14,7 @@ from pa.pipeline.cache import ProcessedImageCache
 from pa.pipeline.modes.base import BaseLiquidMode
 from pa.pipeline.extractors.ridges import RidgeExtractor
 from pa.pipeline import image_primitives as ip
+from pa.pipeline import signal_primitives as sp
 
 
 def _apply_contrast(image_set: ImageSet, params: dict) -> ImageSet:
@@ -69,6 +70,15 @@ def _get_ridge_features(params, image_set, cache):
     return RidgeExtractor(params).extract(prepared, cache)
 
 
+def _mask(signal: np.ndarray, params: dict) -> np.ndarray:
+    """Zero out ignore_top_rows / ignore_bottom_rows entries of a signal."""
+    return sp.mask_signal_edges(
+        signal,
+        ignore_top=int(params.get("ignore_top_rows", 0) or 0),
+        ignore_bottom=int(params.get("ignore_bottom_rows", 0) or 0),
+    )
+
+
 class LineContinuityTerminations(BaseLiquidMode):
     """
     Signal: per-row count of ridge terminations.
@@ -80,14 +90,15 @@ class LineContinuityTerminations(BaseLiquidMode):
             mode="LineContinuity_Terminations",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=f.termination_signal,
+            signal=_mask(f.termination_signal, self.params),
         )
 
     def run_debug(self, image_set, cache):
         f = _get_ridge_features(self.params, image_set, cache)
         profile = ZProfile(mode="LineContinuity_Terminations",
                            pipette_index=image_set.pipette_index,
-                           z_axis_px=f.z_axis_px, signal=f.termination_signal)
+                           z_axis_px=f.z_axis_px,
+                           signal=_mask(f.termination_signal, self.params))
         return profile, f
 
 
@@ -102,14 +113,15 @@ class LineContinuityPatternChange(BaseLiquidMode):
             mode="LineContinuity_PatternChange",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=f.ridge_spacing_signal,
+            signal=_mask(f.ridge_spacing_signal, self.params),
         )
 
     def run_debug(self, image_set, cache):
         f = _get_ridge_features(self.params, image_set, cache)
         profile = ZProfile(mode="LineContinuity_PatternChange",
                            pipette_index=image_set.pipette_index,
-                           z_axis_px=f.z_axis_px, signal=f.ridge_spacing_signal)
+                           z_axis_px=f.z_axis_px,
+                           signal=_mask(f.ridge_spacing_signal, self.params))
         return profile, f
 
 
@@ -124,14 +136,15 @@ class LineContinuityCorrelation(BaseLiquidMode):
             mode="LineContinuity_Correlation",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=f.correlation_signal,
+            signal=_mask(f.correlation_signal, self.params),
         )
 
     def run_debug(self, image_set, cache):
         f = _get_ridge_features(self.params, image_set, cache)
         profile = ZProfile(mode="LineContinuity_Correlation",
                            pipette_index=image_set.pipette_index,
-                           z_axis_px=f.z_axis_px, signal=f.correlation_signal)
+                           z_axis_px=f.z_axis_px,
+                           signal=_mask(f.correlation_signal, self.params))
         return profile, f
 
 
@@ -146,12 +159,13 @@ class LineContinuityDensity(BaseLiquidMode):
             mode="LineContinuity_Density",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=f.line_density_signal,
+            signal=_mask(f.line_density_signal, self.params),
         )
 
     def run_debug(self, image_set, cache):
         f = _get_ridge_features(self.params, image_set, cache)
         profile = ZProfile(mode="LineContinuity_Density",
                            pipette_index=image_set.pipette_index,
-                           z_axis_px=f.z_axis_px, signal=f.line_density_signal)
+                           z_axis_px=f.z_axis_px,
+                           signal=_mask(f.line_density_signal, self.params))
         return profile, f

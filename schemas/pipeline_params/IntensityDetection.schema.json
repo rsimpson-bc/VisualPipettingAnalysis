@@ -79,7 +79,19 @@
       "default": 0,
       "description": "Expand (positive) or contract (negative) the calibrated ROI polygon (ROI1) by this many pixels on every side before computing the per-row intensity signal. Negative values shave off the outer edges of the tip ROI — useful for excluding edge artefacts. The resulting polygon is shown as ROI3 in the A/B Comparison and Stage Detail dialogs. 0 = use the calibrated ROI exactly as drawn."
     },
-
+    "_group_signal_mask": { "type": "string", "const": "--- Signal Masking ---" },
+    "ignore_top_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the top of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
+    "ignore_bottom_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the bottom of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions."
+    },
     "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
     "use_contrast": {
       "type": "boolean",

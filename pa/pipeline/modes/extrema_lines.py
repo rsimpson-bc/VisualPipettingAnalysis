@@ -78,17 +78,20 @@ class ExtremaLines(BaseLiquidMode):
             **({"degree": degree} if method == "polynomial" else {}),
         )
 
+        _top = int(self.params.get("ignore_top_rows", 0) or 0)
+        _bot = int(self.params.get("ignore_bottom_rows", 0) or 0)
+
         density_profile = ZProfile(
             mode="ExtremaLines_Density",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=density_detrended,
+            signal=sp.mask_signal_edges(density_detrended, _top, _bot),
         )
         termination_profile = ZProfile(
             mode="ExtremaLines_Terminations",
             pipette_index=image_set.pipette_index,
             z_axis_px=f.z_axis_px,
-            signal=termination_detrended,
+            signal=sp.mask_signal_edges(termination_detrended, _top, _bot),
         )
         return density_profile, termination_profile
 

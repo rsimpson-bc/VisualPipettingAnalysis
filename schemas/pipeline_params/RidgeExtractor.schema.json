@@ -5,7 +5,72 @@
   "description": "Shared extractor params used by all four LineContinuity modes (Terminations, PatternChange, Correlation, Density). All four modes receive the same params dict; only relevant fields are used per mode.",
   "type": "object",
   "properties": {
+
+    "_group_contrast": { "type": "string", "const": "--- Reference Contrast ---" },
+    "use_contrast": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a per-pixel difference between the sample frame and a reference frame (e.g. tip without liquid) is computed before all other processing. The reference source is set in the A/B Compare dialog or via ImageSet.reference_frames. The contrast image replaces the normal working frame."
+    },
+    "contrast_mode": {
+      "type": "string",
+      "enum": ["absolute", "relative"],
+      "default": "absolute",
+      "description": "'absolute' \u2014 output = |sample \u2212 reference|. Values below contrast_min \u2192 0; at or above contrast_max \u2192 255; in between linearly scaled to 0\u2013255.\n\n'relative' \u2014 signed difference centred at grey (127). sample brighter \u2192 > 127; reference brighter \u2192 < 127. |diff| < contrast_min \u2192 127 (neutral); |diff| \u2265 contrast_max \u2192 0 or 255."
+    },
+    "contrast_blur_method": {
+      "type": "string",
+      "enum": ["none", "gaussian", "bilateral"],
+      "default": "gaussian",
+      "description": "Blur applied independently to both sample and reference before computing the difference. Independent of any other blur step in the pipeline."
+    },
+    "contrast_blur_kernel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31,
+      "default": 5,
+      "description": "Gaussian kernel size for the contrast pre-blur (must be odd). Only used when contrast_blur_method = 'gaussian'."
+    },
+    "contrast_bilateral_d": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25,
+      "default": 9,
+      "description": "Bilateral filter diameter for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_color": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma colour for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_bilateral_sigma_space": {
+      "type": "number",
+      "minimum": 1,
+      "default": 75,
+      "description": "Bilateral sigma space for the contrast pre-blur. Only used when contrast_blur_method = 'bilateral'."
+    },
+    "contrast_min": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 0,
+      "description": "Minimum contrast threshold (0\u2013255). Differences smaller than this are suppressed: 0 in absolute mode, 127 (neutral grey) in relative mode. Filters noise and background flicker."
+    },
+    "contrast_max": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 100,
+      "description": "Maximum contrast cap (0\u2013255). Differences at or above this are fully saturated. Values between contrast_min and contrast_max are linearly stretched to 0\u2013255. Must be greater than contrast_min."
+    },
+
     "_group_blur": { "type": "string", "const": "--- Pre-processing ---" },
+    "use_ab": {
+      "type": "boolean",
+      "default": false,
+      "description": "True = use A:B accumulated difference frames; False = single frame."
+    },
     "blur_method": {
       "type": "string",
       "enum": ["none", "gaussian", "bilateral"],
@@ -38,13 +103,20 @@
       "default": 75,
       "description": "Bilateral filter sigma in coordinate space. Only used when blur_method = 'bilateral'."
     },
+    "roi_expansion_px": {
+      "type": "integer",
+      "minimum": -200,
+      "maximum": 200,
+      "default": 0,
+      "description": "Expand (positive) or contract (negative) the calibrated ROI polygon outward by this many pixels before processing. Negative values shave off the outer edges — useful for excluding tip-wall artefacts. The resulting polygon is shown as ROI3 in the A/B Comparison and Stage Detail dialogs. 0 = use the calibrated ROI exactly as drawn."
+    },
 
-    "_group_gradient": { "type": "string", "const": "--- Gradient / ridge detection ---" },
+    "_group_gradient": { "type": "string", "const": "--- Gradient ---" },
     "gradient_method": {
       "type": "string",
       "enum": ["none", "xy", "x", "y"],
       "default": "xy",
-      "description": "Sobel gradient direction used to build the ridge magnitude map. 'xy' = combined (default, keeps current behaviour). 'x' = |Gx| (vertical ridges only). 'y' = |Gy| (horizontal ridges). 'none' = use pixel intensity directly."
+      "description": "Sobel gradient direction used to build the working magnitude map. 'xy' = combined magnitude. 'x' = |Gx| (emphasises vertical structure — recommended when use_ridges=false). 'y' = |Gy| (emphasises horizontal structure). 'none' = use pixel intensity directly."
     },
     "gradient_ksize": {
       "type": "integer",
@@ -53,56 +125,60 @@
       "default": 3,
       "description": "Sobel kernel size. Use 3, 5, or 7 (odd values only)."
     },
-    "gradient_direction": {
-      "type": "string",
-      "enum": ["xy", "x", "y"],
-      "default": "xy",
-      "description": "Gradient direction for Sobel operator. 'xy' uses combined magnitude."
-    },
-    "ridge_threshold": {
-      "type": "number",
-      "minimum": 0,
-      "default": 30,
-      "description": "Minimum gradient magnitude to flag a pixel as a ridge."
+
+
+    "_group_ridge": { "type": "string", "const": "--- Ridge Detection ---" },
+    "use_ridges": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true (default), the standard ridge pipeline is used: gradient \u2192 orientation filter \u2192 threshold \u2192 binary mask \u2192 morphology. When false, those steps are skipped and band signals (PatternChange, Correlation, Density) are computed directly on the continuous float working image. This avoids hard-threshold fragility. The Terminations signal is not meaningful without ridges and will be zero. Recommended to pair with gradient_method='x' when disabling ridges."
     },
     "angle_tolerance": {
       "type": "number",
       "minimum": 0,
       "maximum": 90,
       "default": 30,
-      "description": "±degrees from horizontal accepted as a vertical-line gradient. Smaller = stricter vertical orientation filter."
+      "description": "\u00b1degrees from horizontal accepted as a vertical-line gradient. Smaller = stricter orientation filter. Only used when use_ridges=true."
+    },
+    "ridge_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "default": 30,
+      "description": "Minimum gradient magnitude to flag a pixel as a ridge. Only used when use_ridges=true."
     },
     "morph_kernel_height": {
       "type": "integer",
       "minimum": 1,
       "maximum": 31,
       "default": 5,
-      "description": "Height (rows) of the morphological structuring element used for close/open operations."
+      "description": "Height (rows) of the morphological structuring element. Only used when use_ridges=true."
     },
     "morph_kernel_width": {
       "type": "integer",
       "minimum": 1,
       "maximum": 15,
       "default": 1,
-      "description": "Width (cols) of the morphological structuring element."
+      "description": "Width (cols) of the morphological structuring element. Only used when use_ridges=true."
     },
     "morph_iterations": {
       "type": "integer",
       "minimum": 0,
       "maximum": 10,
       "default": 1,
-      "description": "Number of morphological close/open iterations. 0 = disabled."
+      "description": "Number of morphological close/open iterations. 0 = disabled. Only used when use_ridges=true."
     },
     "morph_close_enabled": {
       "type": "boolean",
       "default": true,
-      "description": "Apply morphological closing to connect nearby ridge pixels."
+      "description": "Apply morphological closing to connect nearby ridge pixels. Only used when use_ridges=true."
     },
     "morph_open_enabled": {
       "type": "boolean",
       "default": true,
-      "description": "Apply morphological opening to remove small isolated ridge pixels."
+      "description": "Apply morphological opening to remove small isolated ridge pixels. Only used when use_ridges=true."
     },
+
+    "_group_band": { "type": "string", "const": "--- Band Analysis ---" },
     "band_height": {
       "type": "integer",
       "minimum": 1,
@@ -113,12 +189,21 @@
       "type": "integer",
       "minimum": 0,
       "default": 0,
-      "description": "±row window for aggregating termination counts. 0 = exact row only."
+      "description": "\u00b1row window for aggregating termination counts. 0 = exact row only. Only used by LineContinuity_Terminations."
     },
-    "use_ab": {
-      "type": "boolean",
-      "default": false,
-      "description": "True = use A:B accumulated difference frames; False = single frame."
+
+    "_group_signal_mask": { "type": "string", "const": "--- Signal Masking ---" },
+    "ignore_top_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the top of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions. Useful for suppressing artefacts near the upper ROI boundary."
+    },
+    "ignore_bottom_rows": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of rows from the bottom of the ROI to force to zero in the signal. These rows are excluded from POI detection and the graph shows 0 at these positions. Useful for suppressing artefacts near the lower ROI boundary."
     }
   },
   "additionalProperties": false
