@@ -862,6 +862,8 @@ def interpret_signals(
             continue
 
         for rule in rules:
+            if not rule.get("enabled", True):  # skip disabled rules
+                continue
             _apply_rule(
                 raw_signal, rule,
                 state_scores, tip_bottom_density, meniscus_density,

@@ -93,9 +93,9 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.005,
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.002,
-		  "low_below_min_strength": 0.0,
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.002,
+          "low_below_min_strength": 0.0,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
@@ -405,11 +405,11 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-		  "peak_side": "top",
+          "peak_side": "top",
           "min_prominence_frac": 0.15,
-		  "low_above_window_px": 10,
-		  "low_above_threshold_frac": 0.20,
-		  "low_above_min_strength": 0.0,
+          "low_above_window_px": 10,
+          "low_above_threshold_frac": 0.2,
+          "low_above_min_strength": 0.0,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
@@ -438,9 +438,9 @@
           "trigger": "peak",
           "peak_side": "bottom",
           "min_prominence_frac": 0.01,
-		  "low_below_window_px": 10,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
+          "low_below_window_px": 10,
+          "low_below_threshold_frac": 0.15,
+          "low_below_min_strength": 0.0,
           "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
@@ -758,16 +758,20 @@
         "contrast_max": 100.0
       },
       "behavior_rules": [
-	    {
+        {
           "trigger": "rising_edge",
-          "threshold_frac": 0.15,
-          "smoothing_px": 5,
-          "spread_px": 4.0,
-          "pre_low_window_px": 15,
-          "pre_low_frac": 0.7,
           "target": "tip_bottom",
           "direction": 1,
           "strength": 1.0,
+          "smoothing_px": 5,
+          "spread_px": 4.0,
+          "threshold_frac": 0.15,
+          "pre_low_window_px": 15,
+          "pre_low_frac": 0.7,
+          "spatial_modifier": {
+            "type": "offset_below",
+            "range_px": 2
+          },
           "location_prior": [
             [
               0.0,
@@ -785,17 +789,23 @@
               1.0,
               1.0
             ]
-          ],
-          "spatial_modifier": {"type": "offset_below", "range_px": 2}
-	    },
+          ]
+        },
         {
           "trigger": "peak",
+          "target": "meniscus",
+          "direction": 1,
+          "strength": 1.0,
           "min_prominence_frac": 0.2,
           "smoothing_px": 3,
-          "target": "meniscus",
-          "strength": 1.0,
-          "spread_px": 10,
-          "value_min_strength": 0.5
+          "spread_px": 10.0,
+          "value_min_strength": 0,
+          "low_above_window_px": 0,
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.2,
+          "low_below_min_strength": 0.0,
+          "high_above_window_px": 0,
+          "high_below_window_px": 0,
           "location_prior": [
             [
               0.0,
@@ -813,6 +823,7 @@
               1.0,
               0.0
             ]
+          ]
         }
       ]
     },
@@ -1134,10 +1145,10 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-		  "peak_side": "bottom",
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
+          "peak_side": "bottom",
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.15,
+          "low_below_min_strength": 0.0,
           "threshold_frac": 0.2,
           "smoothing_px": 3,
           "target": "meniscus",
@@ -1208,10 +1219,10 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-		  "peak_side": "bottom",
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
+          "peak_side": "bottom",
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.15,
+          "low_below_min_strength": 0.0,
           "threshold_frac": 0.2,
           "smoothing_px": 3,
           "target": "meniscus",
@@ -1516,9 +1527,9 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.005,
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.002,
-		  "low_below_min_strength": 0.0,
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.002,
+          "low_below_min_strength": 0.0,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
@@ -1678,9 +1689,9 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.1,
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.15,
+          "low_below_min_strength": 0.0,
           "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
@@ -1713,9 +1724,9 @@
           "strength": 1.0,
           "spread_px": 10,
           "value_min_strength": 0.5,
-		  "low_above_window_px": 20,
-		  "low_above_threshold_frac": 0.15,
-		  "low_above_min_strength": 0.0,
+          "low_above_window_px": 20,
+          "low_above_threshold_frac": 0.15,
+          "low_above_min_strength": 0.0,
           "location_prior": [
             [
               0.0,
@@ -1789,9 +1800,9 @@
         },
         {
           "trigger": "peak",
-		  "low_above_window_px": 20,
-		  "low_above_threshold_frac": 0.15,
-		  "low_above_min_strength": 0.0,
+          "low_above_window_px": 20,
+          "low_above_threshold_frac": 0.15,
+          "low_above_min_strength": 0.0,
           "min_prominence_frac": 0.1,
           "smoothing_px": 3,
           "target": "tip_bottom",
@@ -1819,9 +1830,9 @@
         },
         {
           "trigger": "peak",
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
+          "low_below_window_px": 20,
+          "low_below_threshold_frac": 0.15,
+          "low_below_min_strength": 0.0,
           "min_prominence_frac": 0.25,
           "smoothing_px": 3,
           "target": "meniscus",

@@ -152,7 +152,9 @@ def _rule_label(rule: Dict[str, Any]) -> str:
     target = rule.get("target", "?")
     d      = rule.get("direction", 1)
     d_str  = "▲" if d > 0 else "▼"
-    return f"{d_str}  {trig}  →  {target}"
+    enabled = rule.get("enabled", True)
+    prefix  = "" if enabled else "✗  "
+    return f"{prefix}{d_str}  {trig}  →  {target}"
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +231,11 @@ class _RuleWidget(QWidget):
         self._outer = QFormLayout(self)
         self._outer.setContentsMargins(8, 8, 8, 8)
         self._outer.setSpacing(6)
+
+        # Enabled toggle
+        self._enabled_chk = QCheckBox("Rule active")
+        self._enabled_chk.setChecked(True)
+        self._outer.addRow("Enabled:", self._enabled_chk)
 
         # Trigger
         self._trigger_cb = QComboBox()
@@ -346,7 +353,8 @@ class _RuleWidget(QWidget):
         pv.addWidget(prior_btns)
         self._outer.addRow("Location prior:", prior_w)
 
-        # -- Wire signals ----------------------------------------------------
+        # Wire signals ----------------------------------------------------
+        self._enabled_chk.stateChanged.connect(self._on_any_change)
         _connect_spinbox(self._strength_sb, self._on_any_change)
         self._trigger_cb.currentIndexChanged.connect(self._on_trigger_changed)
         self._target_cb.currentIndexChanged.connect(self._on_any_change)
@@ -372,6 +380,8 @@ class _RuleWidget(QWidget):
         self._building = True
         try:
             self._rule = copy.deepcopy(rule)
+
+            self._enabled_chk.setChecked(bool(rule.get("enabled", True)))
 
             trig = rule.get("trigger", "peak")
             _set_combo(self._trigger_cb, trig)
@@ -512,6 +522,7 @@ class _RuleWidget(QWidget):
             "target":    self._target_cb.currentText(),
             "direction": 1 if self._dir_cb.currentIndex() == 0 else -1,
             "strength":  self._strength_sb.value(),
+            "enabled":   self._enabled_chk.isChecked(),
         }
 
         if trig == "peak":
@@ -587,6 +598,7 @@ class BehaviorRulesEditorDialog(QDialog):
         self._on_rules_changed = on_rules_changed
         self._original_rules  = copy.deepcopy(entry.get("behavior_rules") or [])
         self._current_rule_widget: Optional[_RuleWidget] = None
+        self._current_row: int = -1
 
         desc = entry.get("description", "")
         self.setWindowTitle(f"Edit behavior rules — {desc}")
@@ -598,10 +610,13 @@ class BehaviorRulesEditorDialog(QDialog):
         self._change_timer.setInterval(250)
         self._change_timer.timeout.connect(self._emit_rules_changed)
 
-        # -- Main layout: list on left, editor on right ----------------------
-        root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        # -- Main layout: VBox(content_row, bottom_buttons) -----------------
+        outer_vbox = QVBoxLayout(self)
+        outer_vbox.setContentsMargins(8, 8, 8, 8)
+        outer_vbox.setSpacing(8)
+
+        content_h = QHBoxLayout()
+        content_h.setSpacing(8)
 
         # ── Left: rule list + buttons ────────────────────────────────────────
         left = QVBoxLayout()
@@ -622,7 +637,7 @@ class BehaviorRulesEditorDialog(QDialog):
             btn_row.addWidget(b)
         left.addLayout(btn_row)
 
-        root.addLayout(left)
+        content_h.addLayout(left)
 
         # ── Right: scrollable rule editor ────────────────────────────────────
         self._editor_scroll = QScrollArea()
@@ -632,7 +647,9 @@ class BehaviorRulesEditorDialog(QDialog):
         self._editor_placeholder = QLabel("Select a rule to edit, or add a new one.")
         self._editor_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._editor_scroll.setWidget(self._editor_placeholder)
-        root.addWidget(self._editor_scroll, 1)
+        content_h.addWidget(self._editor_scroll, 1)
+
+        outer_vbox.addLayout(content_h, 1)
 
         # ── Bottom buttons ───────────────────────────────────────────────────
         bottom = QHBoxLayout()
@@ -643,25 +660,6 @@ class BehaviorRulesEditorDialog(QDialog):
         bottom.addWidget(self._discard_btn)
         bottom.addWidget(self._save_btn)
 
-        outer_v = QVBoxLayout()
-        outer_v.addLayout(root, 1)
-        outer_v.addLayout(bottom)
-        # Replace the root QHBoxLayout with a QVBoxLayout wrapper
-        # We need to restructure: use a proper outer VBox
-        # Redo: clear and use a proper outer layout
-        # (Qt doesn't allow changing the layout after construction, so we use a container)
-
-        # Actually restructure using a container widget approach:
-        # The root layout is the dialog layout — set to VBox
-        self.setLayout(None)  # type: ignore[arg-type]
-
-        outer_vbox = QVBoxLayout(self)
-        content_h  = QHBoxLayout()
-        content_h.setContentsMargins(0, 0, 0, 0)
-        content_h.setSpacing(8)
-        content_h.addLayout(left)
-        content_h.addWidget(self._editor_scroll, 1)
-        outer_vbox.addLayout(content_h, 1)
         outer_vbox.addLayout(bottom)
 
         # -- Wire buttons ----------------------------------------------------
@@ -696,35 +694,37 @@ class BehaviorRulesEditorDialog(QDialog):
 
     def _show_placeholder(self) -> None:
         self._current_rule_widget = None
+        self._current_row = -1
         self._editor_scroll.setWidget(self._editor_placeholder)
 
     def _on_rule_selected(self, row: int) -> None:
         if row < 0 or row >= len(self._rules):
             self._show_placeholder()
             return
-        # Flush current editor state back before switching
+        if row == self._current_row:
+            return  # already showing this rule, no action needed
+        # Flush the OLD widget (identified by _current_row, not currentRow())
         self._flush_current()
-        # Build new editor
+        # Build new editor for the newly selected row
+        self._current_row = row
         widget = _RuleWidget(self._rules[row])
         widget.changed.connect(self._on_rule_changed)
         self._current_rule_widget = widget
         self._editor_scroll.setWidget(widget)
 
     def _flush_current(self) -> None:
-        """Commit current editor values back to self._rules."""
-        row = self._rule_list.currentRow()
-        if self._current_rule_widget is not None and 0 <= row < len(self._rules):
-            self._rules[row] = self._current_rule_widget.read_rule()
+        """Commit current editor values back to self._rules[_current_row]."""
+        if self._current_rule_widget is not None and 0 <= self._current_row < len(self._rules):
+            self._rules[self._current_row] = self._current_rule_widget.read_rule()
 
     def _on_rule_changed(self) -> None:
         """Called on any field change; flush and schedule debounced emit."""
         self._flush_current()
         # Update list label for current rule
-        row = self._rule_list.currentRow()
-        if 0 <= row < len(self._rules):
-            item = self._rule_list.item(row)
+        if 0 <= self._current_row < len(self._rules):
+            item = self._rule_list.item(self._current_row)
             if item:
-                item.setText(_rule_label(self._rules[row]))
+                item.setText(_rule_label(self._rules[self._current_row]))
         self._change_timer.start()
 
     def _emit_rules_changed(self) -> None:
@@ -736,32 +736,39 @@ class BehaviorRulesEditorDialog(QDialog):
 
     def _add_rule(self) -> None:
         self._flush_current()
+        self._current_rule_widget = None
+        self._current_row = -1
         new_rule = _default_rule()
         self._rules.append(new_rule)
         self._rebuild_list(select_row=len(self._rules) - 1)
         self._change_timer.start()
 
     def _delete_rule(self) -> None:
-        row = self._rule_list.currentRow()
+        row = self._current_row
         if 0 <= row < len(self._rules):
             self._rules.pop(row)
             self._current_rule_widget = None
+            self._current_row = -1
             self._rebuild_list(select_row=max(0, row - 1))
             self._change_timer.start()
 
     def _move_up(self) -> None:
         self._flush_current()
-        row = self._rule_list.currentRow()
+        row = self._current_row
         if row > 0:
             self._rules[row - 1], self._rules[row] = self._rules[row], self._rules[row - 1]
+            self._current_rule_widget = None
+            self._current_row = -1
             self._rebuild_list(select_row=row - 1)
             self._change_timer.start()
 
     def _move_down(self) -> None:
         self._flush_current()
-        row = self._rule_list.currentRow()
+        row = self._current_row
         if row < len(self._rules) - 1:
             self._rules[row + 1], self._rules[row] = self._rules[row], self._rules[row + 1]
+            self._current_rule_widget = None
+            self._current_row = -1
             self._rebuild_list(select_row=row + 1)
             self._change_timer.start()
 

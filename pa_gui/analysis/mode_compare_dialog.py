@@ -60,7 +60,7 @@ _SETTINGS_ORG = "rsimpson-bc"
 _SETTINGS_APP = "PA-GUI"
 _SETTINGS_KEY = "ab_compare_dialog"   # shared with ABCompareDialog
 
-_CHART_W    = 187        # px wide per chart column  (560 / 3)
+_CHART_W    = 90         # px wide per chart column
 _DISPLAY_H  = 700        # px tall for the comparison area
 _IMG_W      = 200        # px wide for the image strip
 _HEADER_H   = 56         # px tall header row above each panel (two rows)
@@ -394,6 +394,7 @@ class ModeCompareDialog(QDialog):
         for i in range(1, 9):
             btn = QPushButton(str(i))
             btn.setFixedSize(22, 22)
+            btn.setCheckable(True)
             btn.clicked.connect(lambda _c, n=i: self._pipette_spin.setValue(n))
             top.addWidget(btn)
             self._pipette_btns.append(btn)
@@ -506,7 +507,7 @@ class ModeCompareDialog(QDialog):
         self._calc_mn_chk.stateChanged.connect(self._on_display_option_changed)
         _lay_ca.addWidget(self._calc_mn_chk)
         self._calc_density_chk = QCheckBox("Density")
-        self._calc_density_chk.setChecked(False)
+        self._calc_density_chk.setChecked(True)
         self._calc_density_chk.setToolTip(
             "Overlay the probability density curves for tip-bottom (green)\n"
             "and meniscus (orange) as semi-transparent filled bars.\n"
@@ -1176,6 +1177,16 @@ class ModeCompareDialog(QDialog):
         self._pipette_spin.setEnabled(not checked)
         for btn in self._pipette_btns:
             btn.setEnabled(not checked)
+            btn.setChecked(checked)  # highlight all 8 when active
+        if checked:
+            _all_tips_style = (
+                "QPushButton { background:#2a5f9e; color:white; font-weight:bold;"
+                " border:1px solid #4a8fd8; border-radius:3px; }"
+            )
+            for btn in self._pipette_btns:
+                btn.setStyleSheet(_all_tips_style)
+        else:
+            self._refresh_pipette_buttons()
         # Clear stale results so the next Run starts fresh
         if checked:
             self._results = {}
