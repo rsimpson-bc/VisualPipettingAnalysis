@@ -95,6 +95,7 @@ def add_preset(
     mode: str,
     description: str,
     params_b: Dict[str, Any],
+    behavior_rules: Optional[List[Dict[str, Any]]] = None,
     path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Append a new preset entry, save the file, and return the new entry dict."""
@@ -105,6 +106,7 @@ def add_preset(
         "description": description.strip(),
         "created": datetime.now().isoformat(timespec="seconds"),
         "params_b": params_b,
+        "behavior_rules": behavior_rules if behavior_rules is not None else [],
     }
     data.setdefault("presets", []).append(entry)
     save_presets(data, path)
@@ -131,6 +133,29 @@ def delete_preset(preset_id: str, path: Optional[str] = None) -> bool:
     return True
 
 
+def update_behavior_rules(
+    preset_id: str,
+    rules: List[Dict[str, Any]],
+    path: Optional[str] = None,
+) -> bool:
+    """Replace the ``behavior_rules`` list of a preset identified by *preset_id*.
+
+    Saves the file and returns True on success, False if the id was not found.
+    """
+    data = load_presets(path)
+    for entry in data.get("presets", []):
+        if entry.get("id") == preset_id:
+            entry["behavior_rules"] = rules
+            save_presets(data, path)
+            return True
+    return False
+
+
+def get_behavior_rules(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the behavior_rules list for a preset entry, defaulting to []."""
+    return list(entry.get("behavior_rules") or [])
+
+
 def format_combo_label(entry: Dict[str, Any], max_desc: int = 50) -> str:
     """Return a short human-readable label for a preset combo-box item."""
     created = entry.get("created", "")[:16].replace("T", " ")  # "2026-05-01 14:32"
@@ -142,11 +167,16 @@ def format_combo_label(entry: Dict[str, Any], max_desc: int = 50) -> str:
 
 def format_preview(entry: Dict[str, Any]) -> str:
     """Return a multi-line preview string shown in the preview text area."""
+    rules = entry.get("behavior_rules") or []
+    rules_str = json.dumps(rules, indent=2) if rules else "  (none)"
     lines = [
         f"Mode:        {entry.get('mode', '')}",
         f"Created:     {entry.get('created', '')}",
         f"Description: {entry.get('description', '')}",
         "",
         json.dumps(entry.get("params_b", {}), indent=2),
+        "",
+        "behavior_rules:",
+        rules_str,
     ]
     return "\n".join(lines)

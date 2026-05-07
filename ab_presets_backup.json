@@ -37,34 +37,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -110,34 +93,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -183,34 +149,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -256,28 +205,11 @@
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
-          "smoothing_px": 30,
+		  "smoothing_px": 30,
           "target": "gas_in_tip",
           "strength": 0.5,
           "spread_px": 5,
-          "location_prior": [
-            [
-              0.0,
-              1.0
-            ],
-            [
-              0.8,
-              1.0
-            ],
-            [
-              0.9,
-              0.0
-            ],
-            [
-              1.0,
-              0.0
-            ]
-          ],
+          "location_prior": [[0.0, 1.0], [0.8, 1.0], [0.9, 0.0], [1.0, 0.0]],
           "value_min_strength": 0.5
         }
       ]
@@ -319,86 +251,32 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.1,
-		  "low_below_window_px": 10,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
-          "smoothing_px": 3,
+          "min_prominence_frac": 0.2,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "below_tip",
           "strength": 0.5,
           "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
-          "value_min_strength": 1
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
+          "value_min_strength": 0.5
         },
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "gas_in_tip",
           "strength": 0.5,
           "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              1.0
-            ],
-            [
-              0.8,
-              1.0
-            ],
-            [
-              0.9,
-              0.0
-            ],
-            [
-              1.0,
-              0.0
-            ]
-          ],
+          "location_prior": [[0.0, 1.0], [0.8, 1.0], [0.9, 0.0], [1.0, 0.0]],
           "value_min_strength": 0.5
         }
       ]
@@ -434,34 +312,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -498,66 +359,32 @@
       },
       "behavior_rules": [
         {
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
-          "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
-          "spread_px": 8.0,
-          "strength": 1.0,
-          "target": "tip_bottom",
           "trigger": "peak",
+          "min_prominence_frac": 0.2,
+		  "smoothing_px": 3,
+          "target": "tip_bottom",
+          "strength": 1.0,
+          "spread_px": 8,
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
-          "smoothing_px": 3,
-          "spread_px": 3.0,
-          "strength": 0.5,
-          "target": "liquid_in_tip",
-          "threshold_frac": 0.1,
           "trigger": "high_signal",
+          "threshold_frac": 0.1,
+		  "smoothing_px": 3,
+          "target": "liquid_in_tip",
+          "strength": 0.5,
+          "spread_px": 3,
           "value_min_strength": 0.5
         },
         {
-          "location_prior": [
-            [
-              0.0,
-              1.0
-            ],
-            [
-              0.8,
-              1.0
-            ],
-            [
-              0.9,
-              0.0
-            ],
-            [
-              1.0,
-              0.0
-            ]
-          ],
-          "smoothing_px": 3,
-          "spread_px": 3.0,
-          "strength": 0.5,
-          "target": "gas_in_tip",
-          "threshold_frac": 0.05,
           "trigger": "low_signal",
+          "threshold_frac": 0.05,
+		  "smoothing_px": 3,
+          "target": "gas_in_tip",
+          "strength": 0.5,
+          "spread_px": 3,
+          "location_prior": [[0.0, 1.0], [0.8, 1.0], [0.9, 0.0], [1.0, 0.0]],
           "value_min_strength": 0.5
         }
       ]
@@ -679,7 +506,7 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -732,34 +559,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -812,34 +622,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -891,34 +684,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -1011,7 +787,7 @@
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "liquid_in_tip",
           "strength": 0.5,
           "spread_px": 3,
@@ -1064,34 +840,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -1233,34 +992,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -1308,34 +1050,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -1382,38 +1107,18 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.1,
-		  "low_below_window_px": 10,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
-          "smoothing_px": 3,
+          "min_prominence_frac": 0.2,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
@@ -1465,71 +1170,11 @@
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "liquid_in_tip",
           "strength": 0.5,
           "spread_px": 3,
           "value_min_strength": 0.5
-        },
-        {
-          "trigger": "peak",
-		  "low_above_window_px": 10,
-		  "low_above_threshold_frac": 0.15,
-		  "low_above_min_strength": 0.0,
-          "min_prominence_frac": 0.1,
-          "smoothing_px": 3,
-          "target": "tip_bottom",
-          "strength": 1.0,
-          "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
-          "value_min_strength": 0.9
-        },
-        {
-          "trigger": "peak",
-		  "low_below_window_px": 20,
-		  "low_below_threshold_frac": 0.15,
-		  "low_below_min_strength": 0.0,
-          "min_prominence_frac": 0.25,
-          "smoothing_px": 3,
-          "target": "meniscus",
-          "strength": 1.0,
-          "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              1.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              0.92,
-              0.0
-            ],
-            [
-              1.0,
-              0.0
-            ]
-          ],
-          "value_min_strength": 0.9
         }
       ]
     },
@@ -1578,34 +1223,17 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
           "spread_px": 10,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
+          "location_prior": [[0.0, 0.0], [0.8, 0.0], [0.9, 1.0], [1.0, 1.0]],
           "value_min_strength": 0.5
         },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
-          "smoothing_px": 3,
+		  "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,

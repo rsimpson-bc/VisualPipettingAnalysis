@@ -31,19 +31,19 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import cv2
 import numpy as np
 
-from PySide6.QtCore import Qt, QRectF, QSettings, QTimer, Signal
+from PySide6.QtCore import Qt, QRectF, QSettings, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QImage, QPainter, QPen, QPixmap, QFont,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel,
+    QFrame, QGraphicsScene, QGraphicsView, QGroupBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QMenu, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
-    QSplitter,
+    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget,
+    QWidgetAction, QSplitter,
 )
 
-from pa_gui.analysis import ab_presets
+from pa_gui.analysis import ab_annotations, ab_presets
 from pa_gui.analysis.ab_compare_dialog import (
     _ZoomableView,
     _ndarray_to_pixmap,
@@ -61,7 +61,7 @@ _SETTINGS_KEY = "ab_compare_dialog"   # shared with ABCompareDialog
 _CHART_W    = 187        # px wide per chart column  (560 / 3)
 _DISPLAY_H  = 700        # px tall for the comparison area
 _IMG_W      = 200        # px wide for the image strip
-_HEADER_H   = 28         # px tall header row above each panel
+_HEADER_H   = 56         # px tall header row above each panel (two rows)
 _COLLAPSED_W = 28        # px wide when a chart column is collapsed
 _DEBOUNCE_MS = 600
 
@@ -82,6 +82,8 @@ class _ChartPanel(QWidget):
     move_requested = Signal(object, int)   # (self, delta)
     # emitted when the mouse enters/leaves the panel (for list highlight)
     hovered = Signal(bool)
+    # emitted when the user right-clicks on the chart (annotation mode)
+    annotation_requested = Signal(object, float)   # (self, z_frac)
 
     def __init__(self, preset_idx: int, description: str, parent=None):
         super().__init__(parent)
@@ -98,43 +100,55 @@ class _ChartPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header bar
+        # Header bar — description label on top row, nav buttons on bottom row
         hdr = QWidget()
         hdr.setFixedHeight(_HEADER_H)
         hdr.setStyleSheet("background:#2a2a2a;")
-        hdr_lay = QHBoxLayout(hdr)
-        hdr_lay.setContentsMargins(3, 0, 3, 0)
-        hdr_lay.setSpacing(2)
+        hdr_root = QVBoxLayout(hdr)
+        hdr_root.setContentsMargins(3, 3, 3, 2)
+        hdr_root.setSpacing(2)
+
+        # Top row: description text fills the full width
+        lbl = QLabel(description[:60] + ("…" if len(description) > 60 else ""))
+        lbl.setToolTip(description)
+        lbl.setStyleSheet("color:#ccc; font-size:10px;")
+        lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        hdr_root.addWidget(lbl)
+
+        # Bottom row: nav buttons left-aligned
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(2)
 
         self._btn_left = QPushButton("◀")
         self._btn_left.setFixedSize(20, 20)
         self._btn_left.setToolTip("Move this column left")
         self._btn_left.clicked.connect(lambda: self.move_requested.emit(self, -1))
-        hdr_lay.addWidget(self._btn_left)
+        btn_row.addWidget(self._btn_left)
 
         self._btn_right = QPushButton("▶")
         self._btn_right.setFixedSize(20, 20)
         self._btn_right.setToolTip("Move this column right")
         self._btn_right.clicked.connect(lambda: self.move_requested.emit(self, +1))
-        hdr_lay.addWidget(self._btn_right)
+        btn_row.addWidget(self._btn_right)
 
         self._btn_collapse = QPushButton("▼")
         self._btn_collapse.setFixedSize(20, 20)
         self._btn_collapse.setToolTip("Collapse / expand this column")
         self._btn_collapse.clicked.connect(self._toggle_collapse)
-        hdr_lay.addWidget(self._btn_collapse)
-
-        lbl = QLabel(description[:60] + ("…" if len(description) > 60 else ""))
-        lbl.setToolTip(description)
-        lbl.setStyleSheet("color:#ccc; font-size:10px;")
-        lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        hdr_lay.addWidget(lbl, 1)
+        btn_row.addWidget(self._btn_collapse)
+        btn_row.addStretch()
+        hdr_root.addLayout(btn_row)
 
         root.addWidget(hdr)
 
         # Chart view
         self.view = _ZoomableView(f"Preset {preset_idx + 1}", stretch_fit=True)
         self.view.setMinimumHeight(100)
+        self.view.annotation_mode = True
+        self.view.row_right_clicked.connect(
+            lambda frac: self.annotation_requested.emit(self, frac)
+        )
         root.addWidget(self.view, 1)
 
     # ------------------------------------------------------------------
@@ -274,6 +288,7 @@ class ModeCompareDialog(QDialog):
         self._cached_src_bgr:       Optional[object] = None
         self._cached_ctr_bgr:       Optional[object] = None
         self._cached_z_range:       Optional[tuple]  = None
+        self._cached_interp_z_range: Optional[tuple]  = None   # narrowed to valid rows
         self._cached_bbox:          Optional[list]   = None
         self._cached_roi1_points:   Optional[list]   = None
         self._cached_signal_data:   Dict[int, dict]  = {}   # pre-offset per-preset data
@@ -302,6 +317,19 @@ class ModeCompareDialog(QDialog):
 
         # Ordered list of _ChartPanel widgets currently in the right area
         self._chart_panels: List[_ChartPanel] = []
+
+        # Ground-truth annotation for the current (image_filename, pipette_index)
+        self._annotation: Optional[Dict[str, Any]] = None
+
+        # Background optimizer thread (one at a time)
+        self._optimizer_thread: Optional[_RuleOptimizerThread] = None
+
+        # Signal-interpretation results per preset (populated after each run)
+        self._cached_interp_results: Dict[int, Any] = {}
+        # Combined (cross-preset mean density) result
+        self._cached_combined_interp: Optional[Dict[str, Any]] = None
+        # Reference to the combined chart panel (preset_idx == -1)
+        self._combined_panel: Optional[_ChartPanel] = None
 
         self._setup_ui()
         self._populate_preset_list()
@@ -349,7 +377,7 @@ class ModeCompareDialog(QDialog):
         self._pipette_spin = QSpinBox()
         self._pipette_spin.setRange(1, 32)
         self._pipette_spin.setValue(1)
-        self._pipette_spin.setFixedWidth(44)
+        self._pipette_spin.setFixedWidth(64)
         self._pipette_spin.valueChanged.connect(self._on_pipette_changed)
         top.addWidget(self._pipette_spin)
 
@@ -364,19 +392,132 @@ class ModeCompareDialog(QDialog):
 
         top.addStretch()
 
-        # ── Display options ───────────────────────────────────────────────
-        top.addWidget(QLabel("Overlay:"))
+        # ── Display options — grouped ────────────────────────────────────
+        def _grp(title: str) -> tuple:
+            """Return (QGroupBox, inner QHBoxLayout) for a compact toggle group."""
+            gb = QGroupBox(title)
+            gb.setFlat(True)
+            gb.setStyleSheet(
+                "QGroupBox { border:1px solid #555; border-radius:3px; "
+                "margin-top:6px; padding-top:2px; font-size:9px; color:#aaa; }"
+                "QGroupBox::title { subcontrol-origin:margin; left:4px; }"
+            )
+            lay = QHBoxLayout(gb)
+            lay.setContentsMargins(4, 10, 4, 2)
+            lay.setSpacing(4)
+            return gb, lay
+
+        # ── Overlay group (image-level) ───────────────────────────────────
+        _grp_ov, _lay_ov = _grp("Overlay")
         self._roi1_chk = QCheckBox("ROI1")
         self._roi1_chk.setChecked(True)
         self._roi1_chk.setToolTip("Draw the ROI1 polygon on the image strip")
         self._roi1_chk.stateChanged.connect(self._on_display_option_changed)
-        top.addWidget(self._roi1_chk)
-
+        _lay_ov.addWidget(self._roi1_chk)
         self._poi_chk = QCheckBox("POI")
         self._poi_chk.setChecked(False)
         self._poi_chk.setToolTip("Show detected points-of-interest on signal graphs")
         self._poi_chk.stateChanged.connect(self._on_display_option_changed)
-        top.addWidget(self._poi_chk)
+        _lay_ov.addWidget(self._poi_chk)
+
+        # ── Known (annotation) group ──────────────────────────────────────
+        _grp_kn, _lay_kn = _grp("Known")
+        self._ann_tb_chk = QCheckBox("Tip↓")
+        self._ann_tb_chk.setChecked(True)
+        self._ann_tb_chk.setToolTip(
+            "Show the manually annotated tip-bottom position\n"
+            "(dashed green line; set by right-clicking a chart)"
+        )
+        self._ann_tb_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_kn.addWidget(self._ann_tb_chk)
+        self._ann_mn_chk = QCheckBox("Mn")
+        self._ann_mn_chk.setChecked(True)
+        self._ann_mn_chk.setToolTip(
+            "Show the manually annotated meniscus position\n"
+            "(dashed orange line; set by right-clicking a chart)"
+        )
+        self._ann_mn_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_kn.addWidget(self._ann_mn_chk)
+
+        # ── Calculated (interpretation) group ─────────────────────────────
+        _grp_ca, _lay_ca = _grp("Calculated")
+        self._calc_band_chk = QCheckBox("Band")
+        self._calc_band_chk.setChecked(True)
+        self._calc_band_chk.setToolTip(
+            "Show the narrow state-colour band on the left edge of each chart\n"
+            "(gray = gas, blue = liquid, brown = below tip)"
+        )
+        self._calc_band_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_band_chk)
+        self._calc_soft_chk = QCheckBox("Soft")
+        self._calc_soft_chk.setChecked(False)
+        self._calc_soft_chk.setToolTip(
+            "When Band is on: blend state colours by score probability instead of\n"
+            "using the hard Viterbi decision. Uncertain rows appear as mixed\n"
+            "colours; fully confident rows appear as the pure state colour."
+        )
+        self._calc_soft_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_soft_chk)
+        self._calc_tb_chk = QCheckBox("Tip↓")
+        self._calc_tb_chk.setChecked(True)
+        self._calc_tb_chk.setToolTip(
+            "Show the calculated tip-bottom position\n"
+            "(solid green line; requires behavior_rules)"
+        )
+        self._calc_tb_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_tb_chk)
+        self._calc_mn_chk = QCheckBox("Mn")
+        self._calc_mn_chk.setChecked(True)
+        self._calc_mn_chk.setToolTip(
+            "Show the calculated meniscus position\n"
+            "(solid orange line; requires behavior_rules)"
+        )
+        self._calc_mn_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_mn_chk)
+        self._calc_density_chk = QCheckBox("Density")
+        self._calc_density_chk.setChecked(False)
+        self._calc_density_chk.setToolTip(
+            "Overlay the probability density curves for tip-bottom (green)\n"
+            "and meniscus (orange) as semi-transparent filled bars.\n"
+            "Bar width at each row is proportional to the KDE density value,\n"
+            "normalised so the peak value fills the maximum bar width.\n"
+            "Tip↓ / Mn toggles above control which curves are shown."
+        )
+        self._calc_density_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_density_chk)
+        self._calc_combined_chk = QCheckBox("Comb")
+        self._calc_combined_chk.setChecked(True)
+        self._calc_combined_chk.setToolTip(
+            "Show the cross-preset combined estimate on the image strip.\n"
+            "Tip-bottom (cyan) and meniscus (yellow) lines mark the peak of\n"
+            "the mean density across all presets that have behavior_rules."
+        )
+        self._calc_combined_chk.stateChanged.connect(self._on_display_option_changed)
+        _lay_ca.addWidget(self._calc_combined_chk)
+
+        # ── Pack the three groups into a single drop-down button ───────────
+        # Using QWidgetAction so the menu stays open while checkboxes are
+        # toggled — the user can adjust several options in one click.
+        _oc_widget = QWidget()
+        _oc_lay = QHBoxLayout(_oc_widget)
+        _oc_lay.setContentsMargins(6, 4, 6, 4)
+        _oc_lay.setSpacing(10)
+        _oc_lay.addWidget(_grp_ov)
+        _oc_lay.addWidget(_grp_kn)
+        _oc_lay.addWidget(_grp_ca)
+        _overlay_menu = QMenu(self)
+        _overlay_action = QWidgetAction(_overlay_menu)
+        _overlay_action.setDefaultWidget(_oc_widget)
+        _overlay_menu.addAction(_overlay_action)
+        _overlay_btn = QToolButton()
+        _overlay_btn.setText("Overlays")
+        _overlay_btn.setMenu(_overlay_menu)
+        _overlay_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        _overlay_btn.setToolTip(
+            "Show/hide annotation and analysis overlays.\n"
+            "The panel stays open so multiple options can be toggled at once."
+        )
+        top.addWidget(_overlay_btn)
 
         top.addSpacing(8)
         top.addWidget(QLabel("Graph w:"))
@@ -384,7 +525,7 @@ class ModeCompareDialog(QDialog):
         self._chart_w_spin.setRange(60, 600)
         self._chart_w_spin.setValue(_CHART_W)
         self._chart_w_spin.setSingleStep(10)
-        self._chart_w_spin.setFixedWidth(56)
+        self._chart_w_spin.setFixedWidth(84)
         self._chart_w_spin.setToolTip("Chart column width in pixels")
         self._chart_w_spin.valueChanged.connect(self._on_display_option_changed)
         top.addWidget(self._chart_w_spin)
@@ -403,6 +544,16 @@ class ModeCompareDialog(QDialog):
         )
         self._run_btn.clicked.connect(self._run_comparison)
         top.addWidget(self._run_btn)
+
+        self._optimize_btn = QPushButton("⚙ Optimize…")
+        self._optimize_btn.setEnabled(False)
+        self._optimize_btn.setFixedWidth(90)
+        self._optimize_btn.setToolTip(
+            "Optimise behavior_rules for a selected preset.\n"
+            "Right-click on a chart first to mark tip_bottom / meniscus positions."
+        )
+        self._optimize_btn.clicked.connect(self._on_optimize_clicked)
+        top.addWidget(self._optimize_btn)
 
         root.addLayout(top)
 
@@ -446,6 +597,14 @@ class ModeCompareDialog(QDialog):
         sel_row.addWidget(sel_all_btn)
         sel_row.addWidget(clr_all_btn)
         left_lay.addLayout(sel_row)
+
+        reload_btn = QPushButton("↺  Reload Presets")
+        reload_btn.setToolTip(
+            "Re-read ab_presets.json from disk.\n"
+            "Use this after editing the file externally."
+        )
+        reload_btn.clicked.connect(self._reload_presets)
+        left_lay.addWidget(reload_btn)
 
         ref_row = QHBoxLayout()
         ref_row.addWidget(QLabel("Ref:"))
@@ -509,7 +668,7 @@ class ModeCompareDialog(QDialog):
     # Preset list
     # ------------------------------------------------------------------
 
-    def _populate_preset_list(self):
+    def _populate_preset_list(self, checked_ids: Optional[set] = None):
         from collections import OrderedDict
         from PySide6.QtGui import QColor
         self._preset_list.clear()
@@ -535,15 +694,31 @@ class ModeCompareDialog(QDialog):
             self._preset_list.addItem(hdr)
             for entry in entries:
                 label = ab_presets.format_combo_label(entry)
-                item = QListWidgetItem(f"  {label}")
+                rules = entry.get("behavior_rules") or []
+                rules_badge = f"  [{len(rules)} rule{'s' if len(rules) != 1 else ''}]" if rules else ""
+                item = QListWidgetItem(f"  {label}{rules_badge}")
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                # Pre-check presets belonging to the initial mode
-                init = Qt.CheckState.Checked if entry.get("mode") == self._mode_name else Qt.CheckState.Unchecked
+                # Determine initial check state:
+                # • on reload: use checked_ids snapshot
+                # • on first load: pre-check presets of the initial mode
+                if checked_ids is not None:
+                    init = (Qt.CheckState.Checked
+                            if entry.get("id") in checked_ids
+                            else Qt.CheckState.Unchecked)
+                else:
+                    init = (Qt.CheckState.Checked
+                            if entry.get("mode") == self._mode_name
+                            else Qt.CheckState.Unchecked)
                 item.setCheckState(init)
+                rule_summary = (
+                    "\n\nbehavior_rules: " + str(len(rules)) + " defined"
+                    if rules else "\n\nbehavior_rules: (none)"
+                )
                 item.setToolTip(
                     f"Mode: {entry.get('mode', '')}\n"
-                    f"{entry.get('description', '')}\n\n"
+                    f"{entry.get('description', '')}\n"
                     f"Created: {entry.get('created', '')}"
+                    f"{rule_summary}"
                 )
                 item.setData(Qt.ItemDataRole.UserRole, entry)
                 self._preset_list.addItem(item)
@@ -589,12 +764,24 @@ class ModeCompareDialog(QDialog):
 
         menu = QMenu(self)
 
+        # ── Edit behavior rules (only when a real preset item is clicked) ──
+        clicked_entry = None
+        if clicked_item is not None:
+            clicked_entry = clicked_item.data(Qt.ItemDataRole.UserRole)
+        act_edit_rules = None
+        if clicked_entry is not None:   # not a header
+            desc = clicked_entry.get("description", "preset")
+            act_edit_rules = menu.addAction(
+                f'Edit behavior rules…  "{desc[:40]}"'
+            )
+            menu.addSeparator()
+
         if clicked_mode:
             act_mode = menu.addAction(f'Select all in "{clicked_mode}"')
         else:
             act_mode = None
 
-        act_all = menu.addAction("Select all presets")
+        act_all   = menu.addAction("Select all presets")
         menu.addSeparator()
         act_clear = menu.addAction("Clear all")
 
@@ -602,7 +789,9 @@ class ModeCompareDialog(QDialog):
 
         if chosen is None:
             return
-        if act_mode is not None and chosen is act_mode:
+        if act_edit_rules is not None and chosen is act_edit_rules:
+            self._open_behavior_rules_in_editor(clicked_entry)
+        elif act_mode is not None and chosen is act_mode:
             # Check only presets belonging to this mode; uncheck all others
             current_mode_header = False
             for i in range(self._preset_list.count()):
@@ -618,6 +807,67 @@ class ModeCompareDialog(QDialog):
             self._select_all()
         elif chosen is act_clear:
             self._clear_all()
+
+    def _open_behavior_rules_in_editor(self, entry: dict) -> None:
+        """
+        Open ab_presets.json in Notepad++ (or the system default text editor
+        if Notepad++ is not found) so the user can edit behavior_rules.
+        The file path is shown in the status label so the user knows which
+        file to save.
+        """
+        import subprocess
+        import shutil
+        presets_path = ab_presets.get_presets_path()
+        preset_id    = entry.get("id", "")
+        desc         = entry.get("description", "")
+
+        # Try Notepad++ first (common install locations on Windows)
+        npp_candidates = [
+            r"C:\Program Files\Notepad++\notepad++.exe",
+            r"C:\Program Files (x86)\Notepad++\notepad++.exe",
+            shutil.which("notepad++") or "",
+        ]
+        npp_exe = next((p for p in npp_candidates if p and os.path.isfile(p)), None)
+
+        try:
+            if npp_exe:
+                subprocess.Popen([npp_exe, presets_path])
+            else:
+                # Fall back to the system default (works on Windows, macOS, Linux)
+                import platform
+                if platform.system() == "Windows":
+                    os.startfile(presets_path)   # type: ignore[attr-defined]
+                elif platform.system() == "Darwin":
+                    subprocess.Popen(["open", "-t", presets_path])
+                else:
+                    subprocess.Popen(["xdg-open", presets_path])
+            editor_name = os.path.basename(npp_exe) if npp_exe else "default editor"
+            self._status_lbl.setText(
+                f'Opened in {editor_name} — id: {preset_id[:16]}…  '
+                f'Click "↺ Reload Presets" after saving.'
+            )
+        except Exception as exc:
+            self._status_lbl.setText(f"Could not open editor: {exc}")
+
+    def _reload_presets(self) -> None:
+        """Re-read ab_presets.json and rebuild the preset list, preserving
+        the current check state of presets whose id is still present."""
+        # Snapshot which preset ids are currently checked
+        checked_ids: set = set()
+        for i in range(self._preset_list.count()):
+            item = self._preset_list.item(i)
+            entry = item.data(Qt.ItemDataRole.UserRole)
+            if entry is not None and item.checkState() == Qt.CheckState.Checked:
+                checked_ids.add(entry.get("id"))
+
+        self._populate_preset_list(checked_ids=checked_ids)
+        # Sync behavior_rules in cached _results with the freshly reloaded file
+        self._refresh_result_entries()
+        # Recompute interpretations and refresh display if a run exists
+        if self._cached_signal_data:
+            self._recompute_interpretations()
+            self._rerender_pixmaps()
+        self._status_lbl.setText("Presets reloaded.")
 
     # ------------------------------------------------------------------
     # Source / reference browse
@@ -655,6 +905,7 @@ class ModeCompareDialog(QDialog):
         )
         self._populate_frame_combo()
         self._run_btn.setEnabled(True)
+        self._load_annotation_for_current()
 
     def _load_source_folder(self, folder: str):
         exts = (".jpg", ".jpeg", ".png", ".bmp")
@@ -859,6 +1110,9 @@ class ModeCompareDialog(QDialog):
                     _DISPLAY_H, self._cached_strip_display_w, self._cached_bbox,
                     roi1_points=self._cached_roi1_points if show_roi1 else None,
                 )
+            strip_pm = self._draw_interp_on_strip(strip_pm)
+            if ctr_pm is not None:
+                ctr_pm = self._draw_interp_on_strip(ctr_pm)
             self._cached_strip.set_images(strip_pm, ctr_pm)
 
         # Charts
@@ -880,14 +1134,36 @@ class ModeCompareDialog(QDialog):
                 extra_signals=sig_data["extra_signals"],
                 z_range_override=self._cached_z_range,
             )
-            panel.view.set_pixmap(_ndarray_to_pixmap(chart_arr))
+            pm = _ndarray_to_pixmap(chart_arr)
+            pm = self._draw_interp_on_chart(pm, panel.preset_idx)
+            pm = self._draw_annotation_lines(pm)
+            panel.view.set_pixmap(pm)
             if w_changed:
                 panel.set_expanded_width(chart_w)
+
+        # Combined panel (preset_idx == -1)
+        if self._combined_panel is not None and self._calc_combined_chk.isChecked():
+            self._combined_panel.setVisible(True)
+            comb = self._cached_combined_interp
+            if comb is not None:
+                pm = self._draw_combined_chart(chart_w, _DISPLAY_H, comb)
+            else:
+                # No combined data yet — blank chart
+                pm = _ndarray_to_pixmap(
+                    np.zeros((_DISPLAY_H, chart_w, 3), dtype=np.uint8)
+                )
+            self._combined_panel.view.set_pixmap(pm)
+            if w_changed:
+                self._combined_panel.set_expanded_width(chart_w)
+        elif self._combined_panel is not None:
+            self._combined_panel.setVisible(False)
 
         if w_changed:
             margins = self._panels_layout.contentsMargins()
             sp = self._panels_layout.spacing()
-            n = len(self._chart_panels)
+            # Count only visible panels for min-width
+            visible_panels = [p for p in self._chart_panels if p.isVisible()]
+            n = len(visible_panels)
             content_w = (
                 margins.left() + margins.right()
                 + self._cached_strip_display_w
@@ -924,6 +1200,9 @@ class ModeCompareDialog(QDialog):
             import traceback
             self._status_lbl.setText(f"Render error: {exc}")
             traceback.print_exc()
+        # Load any existing annotation for the current image + pipette
+        self._load_annotation_for_current()
+        self._optimize_btn.setEnabled(bool(self._cached_signal_data))
 
     def _on_error(self, msg: str):
         self._status_lbl.setText(f"Error: {msg[:80]}")
@@ -938,6 +1217,7 @@ class ModeCompareDialog(QDialog):
         self._all_views.clear()
         self._chart_panels.clear()
         self._panel_list_row.clear()
+        self._combined_panel = None
         self._panels_container.setMinimumWidth(0)
         # Remove all widgets except the trailing stretch
         while self._panels_layout.count() > 1:
@@ -989,6 +1269,34 @@ class ModeCompareDialog(QDialog):
             return
 
         z_range = (global_z_min, global_z_max)
+
+        # ── 1b. Narrow z_range to the rows that are valid in every preset ──
+        # Each preset may have ignore_top_rows / ignore_bottom_rows which zero
+        # out edge rows via mask_signal_edges.  For interpretation we only want
+        # the intersection of valid windows so those artificially-zeroed edge
+        # rows (which look like "low_signal") don't pollute the analysis.
+        # roi_expansion_px is implicitly handled: a preset with larger expansion
+        # has a z_axis that starts earlier, so indexing by ignore_top_rows in
+        # absolute z coordinates automatically gives the right calibrated offset.
+        interp_z_min: float = global_z_min
+        interp_z_max: float = global_z_max
+        for idx, sig_stage in signal_stages.items():
+            entry  = self._results[idx].get("entry", {})
+            params = entry.get("params_b", {})
+            ignore_top    = int(params.get("ignore_top_rows",    0) or 0)
+            ignore_bottom = int(params.get("ignore_bottom_rows", 0) or 0)
+            roi_y  = roi_y_offsets.get(idx, 0.0)
+            z_full = sig_stage.z_axis_px + roi_y  # full-image coords, same length as signal
+            n_rows = len(z_full)
+            if ignore_top > 0 and n_rows > ignore_top:
+                interp_z_min = max(interp_z_min, float(z_full[ignore_top]))
+            if ignore_bottom > 0 and n_rows > ignore_bottom:
+                interp_z_max = min(interp_z_max, float(z_full[n_rows - 1 - ignore_bottom]))
+        if interp_z_min >= interp_z_max:
+            # Degenerate — fall back to the full range
+            interp_z_range: tuple = z_range
+        else:
+            interp_z_range = (interp_z_min, interp_z_max)
 
         # ── 2. Resolve ROI bbox and source images ───────────────────────────
         first_res = self._results[min(self._results.keys())]
@@ -1099,6 +1407,7 @@ class ModeCompareDialog(QDialog):
             self._chart_panels.append(panel)
             self._all_views.append(panel.view)
             panel.view.row_hovered.connect(self._on_row_hovered)
+            panel.annotation_requested.connect(self._on_chart_annotation_requested)
 
             # Cache pre-offset signal data so re-renders (toggle/resize) stay aligned
             self._cached_signal_data[idx] = {
@@ -1118,6 +1427,22 @@ class ModeCompareDialog(QDialog):
         # Set minimum width on the container so the horizontal scrollbar
         # appears correctly.  Height is unconstrained — setWidgetResizable(True)
         # on the scroll area fills the viewport height automatically.
+
+        # ── 4b. Placeholder combined panel (filled after _recompute_interpretations) ──
+        combined_panel = _ChartPanel(-1, "∑ Combined")
+        combined_panel.set_expanded_width(self._chart_w)
+        combined_panel._btn_left.setVisible(False)
+        combined_panel._btn_right.setVisible(False)
+        combined_panel.view.annotation_mode = False
+        self._panels_layout.insertWidget(
+            self._panels_layout.count() - 1,
+            combined_panel,
+        )
+        self._combined_panel = combined_panel
+        self._chart_panels.append(combined_panel)
+        self._all_views.append(combined_panel.view)
+        combined_panel.view.row_hovered.connect(self._on_row_hovered)
+
         margins = self._panels_layout.contentsMargins()
         sp = self._panels_layout.spacing()
         n = len(self._chart_panels)
@@ -1129,10 +1454,10 @@ class ModeCompareDialog(QDialog):
             + max(0, n - 1) * sp
         )
         self._panels_container.setMinimumWidth(content_w)
-        # ── 5. Cache data for cheap re-renders (toggle ROI1/POI, resize width) ──
         self._cached_src_bgr        = src_bgr
         self._cached_ctr_bgr        = ctr_bgr
-        self._cached_z_range        = z_range   # full-image row coordinates
+        self._cached_z_range        = z_range          # full display range
+        self._cached_interp_z_range = interp_z_range   # narrowed to valid rows
         self._cached_bbox           = _bbox_src
         self._cached_strip_display_w = strip_display_w
         self._cached_strip          = strip
@@ -1147,6 +1472,9 @@ class ModeCompareDialog(QDialog):
                     break
             if self._cached_roi1_points:
                 break
+
+        # Compute signal interpretations for presets that have behavior_rules.
+        self._recompute_interpretations()
 
         # Re-render immediately to apply current ROI1/POI toggle state.
         self._rerender_pixmaps()
@@ -1259,3 +1587,719 @@ class ModeCompareDialog(QDialog):
         # Remove and re-insert
         item = lo.takeAt(old_layout_idx)
         lo.insertWidget(new_layout_idx, item.widget())
+
+    # ------------------------------------------------------------------
+    # Annotation helpers
+    # ------------------------------------------------------------------
+
+    def _current_image_path(self) -> str:
+        """Full path of the currently selected source image (used as sidecar key)."""
+        idx = max(0, self._frame_combo.currentIndex())
+        if idx < len(self._image_paths):
+            return self._image_paths[idx]
+        return ""
+
+    def _load_annotation_for_current(self) -> None:
+        """Refresh ``self._annotation`` from the sidecar for the current image+pipette."""
+        fpath = self._current_image_path()
+        pip   = self._pipette_spin.value() - 1
+        if fpath:
+            self._annotation = ab_annotations.get_annotation(fpath, pip)
+        else:
+            self._annotation = None
+
+    # ------------------------------------------------------------------
+    # Phase C: signal-interpretation overlays
+    # ------------------------------------------------------------------
+
+    def _refresh_result_entries(self) -> None:
+        """Update behavior_rules in cached _results from the freshly loaded
+        presets file so that _recompute_interpretations uses current rules."""
+        data = ab_presets.load_presets()
+        by_id = {p["id"]: p for p in data.get("presets", [])}
+        for res in self._results.values():
+            pid = res.get("entry", {}).get("id")
+            if pid and pid in by_id:
+                res["entry"]["behavior_rules"] = by_id[pid].get("behavior_rules", [])
+
+    def _recompute_interpretations(self) -> None:
+        """Run ``interpret_signals`` for every preset in ``_cached_signal_data``
+        that has behavior_rules.  Stores results in ``_cached_interp_results``."""
+        from pa.pipeline.interpreters.signal_interpreter import interpret_signals
+
+        # Use the narrowed interp z_range (excludes masked edge rows) so that
+        # artificially-zeroed rows don't contaminate the interpretation.
+        interp_z_range = self._cached_interp_z_range or self._cached_z_range
+        if interp_z_range is None:
+            self._cached_interp_results = {}
+            return
+
+        z_min, z_max = interp_z_range
+        global_z_axis = np.arange(int(z_min), int(z_max) + 1, dtype=np.float32)
+
+        results: Dict[int, Any] = {}
+        for idx, sig_data in self._cached_signal_data.items():
+            res   = self._results.get(idx)
+            entry = res.get("entry", {}) if res else {}
+            rules = list(entry.get("behavior_rules") or [])
+            if not rules:
+                continue
+
+            z_axis  = sig_data["z_axis"]
+            signals = [(sig_data["signal"], z_axis)]
+            for es in (sig_data.get("extra_signals") or []):
+                s = es.get("signal")
+                z = es.get("z_axis", z_axis)
+                if s is not None and len(s) > 0:
+                    signals.append((
+                        np.asarray(s, dtype=np.float32),
+                        np.asarray(z, dtype=np.float32)
+                        if z is not None else z_axis,
+                    ))
+
+            try:
+                interp = interpret_signals(
+                    signals=signals,
+                    rules_per_signal=[rules] * len(signals),
+                    global_z_axis=global_z_axis,
+                )
+                results[idx] = interp
+            except Exception as _exc:
+                import traceback
+                traceback.print_exc()   # visible in terminal; overlay just skipped
+
+        self._cached_interp_results = results
+
+        # ── Combined cross-preset density ──────────────────────────────────
+        if results:
+            from pa.pipeline.interpreters.signal_interpreter import _kde_peak
+            first = next(iter(results.values()))
+            gza   = first.z_axis
+            tb_stack = np.stack([r.tip_bottom_density for r in results.values()], axis=0)
+            mn_stack = np.stack([r.meniscus_density   for r in results.values()], axis=0)
+            combined_tb = tb_stack.mean(axis=0)
+            combined_mn = mn_stack.mean(axis=0)
+            self._cached_combined_interp = {
+                "z_axis":            gza,
+                "tip_bottom_density": combined_tb,
+                "meniscus_density":   combined_mn,
+                "tip_bottom_z":       _kde_peak(combined_tb, gza),
+                "meniscus_z":         _kde_peak(combined_mn, gza),
+            }
+        else:
+            self._cached_combined_interp = None
+
+    def _draw_interp_on_strip(self, pm: QPixmap) -> QPixmap:
+        """Draw solid boundary lines from all presets' interpretations onto *pm*.
+
+        Green  = tip_bottom estimates
+        Orange = meniscus estimates
+        Lines are drawn from all presets that have a valid estimate.
+        """
+        show_tb   = self._calc_tb_chk.isChecked()
+        show_mn   = self._calc_mn_chk.isChecked()
+        show_comb = self._calc_combined_chk.isChecked()
+        if not (show_tb or show_mn or show_comb):
+            return pm
+        if not self._cached_interp_results and not self._cached_combined_interp:
+            return pm
+        z_range = self._cached_z_range
+        if z_range is None:
+            return pm
+
+        z_min, z_max = z_range
+        z_span = max(1.0, z_max - z_min)
+        h = pm.height()
+        w = pm.width()
+
+        tb_zs = ([r.tip_bottom_z for r in self._cached_interp_results.values()
+                  if r.tip_bottom_z is not None] if show_tb else [])
+        mn_zs = ([r.meniscus_z   for r in self._cached_interp_results.values()
+                  if r.meniscus_z is not None]  if show_mn else [])
+
+        comb_tb_z = (self._cached_combined_interp or {}).get("tip_bottom_z") if show_comb else None
+        comb_mn_z = (self._cached_combined_interp or {}).get("meniscus_z")   if show_comb else None
+
+        if not tb_zs and not mn_zs and comb_tb_z is None and comb_mn_z is None:
+            return pm
+
+        result = QPixmap(pm)
+        painter = QPainter(result)
+        font = painter.font()
+        font.setPointSize(7)
+        painter.setFont(font)
+
+        # Per-preset thin lines (1 px)
+        for z_val in tb_zs:
+            y = int((float(z_val) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(0, 220, 80), 1))
+            painter.drawLine(0, y, w, y)
+
+        for z_val in mn_zs:
+            y = int((float(z_val) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(255, 160, 0), 1))
+            painter.drawLine(0, y, w, y)
+
+        # Combined thick lines (2 px, distinct colours: cyan / yellow)
+        if comb_tb_z is not None:
+            y = int((float(comb_tb_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(0, 230, 230), 2))
+            painter.drawLine(0, y, w, y)
+            painter.setPen(QPen(QColor(0, 230, 230)))
+            painter.drawText(2, max(10, y - 1), "tb")
+
+        if comb_mn_z is not None:
+            y = int((float(comb_mn_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(230, 230, 0), 2))
+            painter.drawLine(0, y, w, y)
+            painter.setPen(QPen(QColor(230, 230, 0)))
+            painter.drawText(2, max(10, y - 1), "mn")
+
+        painter.end()
+        return result
+
+    def _draw_interp_on_chart(self, pm: QPixmap, preset_idx: int) -> QPixmap:
+        """Draw interpretation overlays on a chart pixmap.
+
+        Layers (bottom to top):
+          1. State band (8 px, left edge) — hard Viterbi or soft-blended.
+          2. Probability density bars — tip_bottom (green) and meniscus
+             (orange), extending rightward from the band edge.
+          3. Solid boundary lines + text labels.
+        """
+        show_band    = self._calc_band_chk.isChecked()
+        show_soft    = self._calc_soft_chk.isChecked()
+        show_tb      = self._calc_tb_chk.isChecked()
+        show_mn      = self._calc_mn_chk.isChecked()
+        show_density = self._calc_density_chk.isChecked()
+        if not (show_band or show_tb or show_mn or show_density):
+            return pm
+        interp = self._cached_interp_results.get(preset_idx)
+        if interp is None:
+            return pm
+        z_range = self._cached_z_range
+        if z_range is None:
+            return pm
+
+        z_min, z_max = z_range
+        z_span = max(1.0, z_max - z_min)
+        h = pm.height()
+        w = pm.width()
+        BAND_W = 8
+
+        gza = interp.z_axis
+        seq = interp.state_sequence
+        if (show_band or show_density) and (len(gza) == 0 or len(seq) == 0):
+            show_band    = False
+            show_density = False
+        if not (show_band or show_tb or show_mn or show_density):
+            return pm
+
+        # Row mapping: display row index → position in gza
+        y_z     = np.linspace(float(z_min), float(z_max), h, dtype=np.float32)
+        row_idx = np.searchsorted(gza.astype(np.float32), y_z).clip(0, len(gza) - 1)
+
+        result  = QPixmap(pm)
+        painter = QPainter(result)
+
+        # ── Layer 1: state band ───────────────────────────────────────────
+        # BGR palette shared by hard and soft modes
+        _STATE_BGR_F = np.array([
+            [140, 140, 140],   # STATE_GAS
+            [200,  80,  40],   # STATE_LIQ
+            [ 30,  40,  80],   # STATE_BELOW
+        ], dtype=np.float32)
+
+        if show_band:
+            if show_soft and len(interp.state_scores) == len(gza):
+                # Soft: blend colours by softmax of state_scores.
+                # state_scores are log-likelihood accumulators whose absolute
+                # magnitudes vary widely; a plain softmax often makes one state
+                # dominate everywhere (usually GAS, which looks all-grey).
+                # Fix: per-row range-normalise to a fixed spread of 5.0 before
+                # softmax so the winner always wins by a meaningful margin while
+                # gradual transitions still produce blended colours.
+                sc = interp.state_scores[row_idx].astype(np.float64)   # (h, 3)
+                row_min   = sc.min(axis=1, keepdims=True)
+                row_max   = sc.max(axis=1, keepdims=True)
+                row_range = np.maximum(row_max - row_min, 1e-9)
+                sc = (sc - row_min) / row_range * 5.0                   # winner=5, rest in [0,5]
+                sc -= sc.max(axis=1, keepdims=True)                      # numerical stability
+                exp_s  = np.exp(np.clip(sc, -20.0, 0.0))
+                soft_p = (exp_s / (exp_s.sum(axis=1, keepdims=True) + 1e-9)).astype(np.float32)
+                row_bgr = (soft_p @ _STATE_BGR_F).clip(0, 255).astype(np.uint8)  # (h, 3)
+            else:
+                # Hard: use Viterbi state sequence
+                row_states = seq[row_idx].clip(0, 2)
+                row_bgr    = _STATE_BGR_F[row_states].astype(np.uint8)            # (h, 3)
+
+            band_bgr = np.broadcast_to(row_bgr[:, np.newaxis, :], (h, BAND_W, 3)).copy()
+            band_rgb = np.ascontiguousarray(cv2.cvtColor(band_bgr, cv2.COLOR_BGR2RGB))
+            painter.setOpacity(0.55)
+            qimg = QImage(
+                band_rgb.data, BAND_W, h,
+                int(band_rgb.strides[0]), QImage.Format.Format_RGB888,
+            )
+            painter.drawImage(0, 0, qimg)
+
+        # ── Layer 2: probability density bars ────────────────────────────
+        if show_density:
+            # Max bar width: up to 25 % of chart area (min 6 px)
+            max_bar_w = max(6, min(60, (w - BAND_W) // 4))
+            gza_f = gza.astype(np.float32)
+            xs    = np.arange(max_bar_w, dtype=np.int32)
+
+            def _density_bars_rgba(density_1d: np.ndarray,
+                                   r: int, g: int, b: int) -> None:
+                d    = np.interp(y_z, gza_f, density_1d.astype(np.float32),
+                                 left=0.0, right=0.0)
+                dmax = float(d.max())
+                if dmax < 1e-9:
+                    return
+                bar_ws = (d / dmax * max_bar_w).astype(np.int32).clip(0, max_bar_w)
+                mask   = xs[np.newaxis, :] < bar_ws[:, np.newaxis]   # (h, max_bar_w)
+                arr    = np.zeros((h, max_bar_w, 4), dtype=np.uint8)
+                arr[mask, 0] = r
+                arr[mask, 1] = g
+                arr[mask, 2] = b
+                arr[mask, 3] = 140   # ~55 % alpha
+                arr = np.ascontiguousarray(arr)
+                qi  = QImage(arr.data, max_bar_w, h,
+                             int(arr.strides[0]), QImage.Format.Format_RGBA8888)
+                painter.setOpacity(1.0)
+                painter.drawImage(BAND_W, 0, qi)
+
+            if show_tb:
+                _density_bars_rgba(interp.tip_bottom_density,  60, 220,  60)  # green
+            if show_mn:
+                _density_bars_rgba(interp.meniscus_density,   255, 160,   0)  # orange
+
+        # ── Layer 3: boundary lines + labels ─────────────────────────────
+        painter.setOpacity(1.0)
+        font = painter.font()
+        font.setPointSize(7)
+        painter.setFont(font)
+
+        if show_tb and interp.tip_bottom_z is not None:
+            y = int((float(interp.tip_bottom_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(0, 220, 80), 1))
+            painter.drawLine(BAND_W, y, w, y)
+            painter.setPen(QPen(QColor(0, 220, 80)))
+            painter.drawText(BAND_W + 2, max(10, y - 1), "tb")
+
+        if show_mn and interp.meniscus_z is not None:
+            y = int((float(interp.meniscus_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(255, 160, 0), 1))
+            painter.drawLine(BAND_W, y, w, y)
+            painter.setPen(QPen(QColor(255, 160, 0)))
+            painter.drawText(BAND_W + 2, max(10, y - 1), "mn")
+
+        painter.end()
+        return result
+
+    def _draw_combined_chart(
+        self,
+        w: int,
+        h: int,
+        comb: Dict[str, Any],
+    ) -> QPixmap:
+        """Render a chart for the combined cross-preset result.
+
+        Layout (left → right):
+          • 8 px left edge: dark background (reserved, no state band — combined
+            state sequence is not computed).
+          • Remaining width: tip_bottom density (green) and meniscus density
+            (orange) bars drawn as filled horizontal bars; bar extends rightward
+            from x=8, width proportional to normalised density.
+          • Solid cyan line for combined tip_bottom_z; solid yellow for meniscus_z.
+        """
+        show_tb = self._calc_tb_chk.isChecked()
+        show_mn = self._calc_mn_chk.isChecked()
+
+        z_range = self._cached_z_range
+        if z_range is None:
+            return _ndarray_to_pixmap(np.zeros((h, w, 3), dtype=np.uint8))
+
+        z_min, z_max = z_range
+        z_span = max(1.0, z_max - z_min)
+        BAND_W   = 8
+        BAR_AREA = max(6, w - BAND_W)
+
+        gza   = comb["z_axis"].astype(np.float32)
+        y_z   = np.linspace(float(z_min), float(z_max), h, dtype=np.float32)
+        xs    = np.arange(BAR_AREA, dtype=np.int32)
+
+        # Dark background
+        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        canvas[:, :, :] = 22   # near-black
+
+        def _fill_bars(density_1d: np.ndarray, r: int, g: int, b: int) -> None:
+            d    = np.interp(y_z, gza, density_1d.astype(np.float32),
+                             left=0.0, right=0.0)
+            dmax = float(d.max())
+            if dmax < 1e-9:
+                return
+            bar_ws = (d / dmax * BAR_AREA).astype(np.int32).clip(0, BAR_AREA)
+            for row in range(h):
+                bw = bar_ws[row]
+                if bw > 0:
+                    canvas[row, BAND_W:BAND_W + bw, 0] = \
+                        np.maximum(canvas[row, BAND_W:BAND_W + bw, 0], r)
+                    canvas[row, BAND_W:BAND_W + bw, 1] = \
+                        np.maximum(canvas[row, BAND_W:BAND_W + bw, 1], g)
+                    canvas[row, BAND_W:BAND_W + bw, 2] = \
+                        np.maximum(canvas[row, BAND_W:BAND_W + bw, 2], b)
+
+        if show_tb:
+            _fill_bars(comb["tip_bottom_density"], 30, 160, 30)   # dark green
+        if show_mn:
+            _fill_bars(comb["meniscus_density"],   160, 100, 0)   # dark orange
+
+        # Convert to RGB pixmap and add boundary lines via QPainter
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+        qimg = QImage(rgb.data, w, h, int(rgb.strides[0]),
+                      QImage.Format.Format_RGB888)
+        pm = QPixmap.fromImage(qimg.copy())
+
+        painter = QPainter(pm)
+        font = painter.font()
+        font.setPointSize(7)
+        font.setBold(True)
+        painter.setFont(font)
+
+        tb_z = comb.get("tip_bottom_z")
+        mn_z = comb.get("meniscus_z")
+
+        if show_tb and tb_z is not None:
+            y = int((float(tb_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(0, 230, 230), 2))   # cyan
+            painter.drawLine(BAND_W, y, w, y)
+            painter.setPen(QPen(QColor(0, 230, 230)))
+            painter.drawText(BAND_W + 2, max(12, y - 1), "tb")
+
+        if show_mn and mn_z is not None:
+            y = int((float(mn_z) - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            painter.setPen(QPen(QColor(230, 230, 0), 2))   # yellow
+            painter.drawLine(BAND_W, y, w, y)
+            painter.setPen(QPen(QColor(230, 230, 0)))
+            painter.drawText(BAND_W + 2, max(12, y - 1), "mn")
+
+        painter.end()
+        return pm
+
+    # ------------------------------------------------------------------
+    # Annotation helpers
+    # ------------------------------------------------------------------
+
+    def _draw_annotation_lines(self, pm: QPixmap) -> QPixmap:
+        """Overlay horizontal dashed lines for any annotated z positions.
+
+        Green  = tip_bottom_z
+        Orange = meniscus_z
+
+        The pixmap is returned as a new copy with the lines drawn on top.
+        """
+        ann = self._annotation
+        if ann is None:
+            return pm
+        tip_z = ann.get("tip_bottom_z") if self._ann_tb_chk.isChecked() else None
+        men_z = ann.get("meniscus_z")   if self._ann_mn_chk.isChecked() else None
+        if tip_z is None and men_z is None:
+            return pm
+
+        z_range = self._cached_z_range
+        if z_range is None:
+            return pm
+        z_min, z_max = z_range
+        z_span = max(1.0, z_max - z_min)
+
+        result = QPixmap(pm)
+        painter = QPainter(result)
+        h = result.height()
+        w = result.width()
+
+        def _draw_line(z_val: float, color: QColor, label: str) -> None:
+            y = int((z_val - z_min) / z_span * h)
+            y = max(1, min(h - 1, y))
+            pen = QPen(color, 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(0, y, w, y)
+            # Small label
+            font = painter.font()
+            font.setPointSize(7)
+            painter.setFont(font)
+            painter.setPen(QPen(color))
+            painter.drawText(2, max(10, y - 2), label)
+
+        if tip_z is not None:
+            _draw_line(float(tip_z), QColor(60, 220, 60),   "tip_bottom")
+        if men_z is not None:
+            _draw_line(float(men_z), QColor(255, 160, 50),  "meniscus")
+
+        painter.end()
+        return result
+
+    def _on_chart_annotation_requested(self, panel: "_ChartPanel", z_frac: float) -> None:
+        """Called when the user right-clicks on a chart at z-fraction *z_frac*."""
+        if self._cached_z_range is None:
+            return
+
+        z_min, z_max = self._cached_z_range
+        z_val = z_min + z_frac * (z_max - z_min)
+        z_int = int(round(z_val))
+
+        fpath  = self._current_image_path()
+        pip    = self._pipette_spin.value() - 1
+        preset_idx = panel.preset_idx
+
+        # Resolve preset entry from running results
+        entry: Dict[str, Any] = {}
+        res = self._results.get(preset_idx)
+        if res:
+            entry = res.get("entry", {})
+
+        ann = self._annotation or {}
+        current_tb = ann.get("tip_bottom_z")
+        current_mn = ann.get("meniscus_z")
+
+        menu = QMenu(self)
+        menu.setTitle(f"z = {z_int} px")
+
+        act_tb  = menu.addAction(f"Mark tip_bottom here  (z={z_int})")
+        act_mn  = menu.addAction(f"Mark meniscus here    (z={z_int})")
+        menu.addSeparator()
+
+        act_clr_tb = menu.addAction(
+            f"Clear tip_bottom  (was {int(current_tb)} px)" if current_tb is not None
+            else "Clear tip_bottom  (not set)"
+        )
+        act_clr_mn = menu.addAction(
+            f"Clear meniscus    (was {int(current_mn)} px)" if current_mn is not None
+            else "Clear meniscus    (not set)"
+        )
+        act_clr_tb.setEnabled(current_tb is not None)
+        act_clr_mn.setEnabled(current_mn is not None)
+
+        if entry.get("behavior_rules"):
+            has_ann = (current_tb is not None or current_mn is not None
+                       or ann.get("tip_bottom_z") is not None
+                       or ann.get("meniscus_z") is not None)
+            # include the new mark in the check
+            menu.addSeparator()
+            desc = entry.get("description", f"preset {preset_idx + 1}")[:40]
+            act_opt = menu.addAction(f'Optimize rules for "{desc}"…')
+            act_opt.setEnabled(True)   # user can start optimizer; annotation created first
+        else:
+            act_opt = None
+
+        from PySide6.QtGui import QCursor
+        chosen = menu.exec(QCursor.pos())
+
+        if chosen is None:
+            return
+
+        if chosen is act_tb:
+            if fpath:
+                self._annotation = ab_annotations.upsert_annotation(
+                    fpath, pip, tip_bottom_z=float(z_val)
+                )
+            self._status_lbl.setText(f"Annotated tip_bottom = {z_int} px  (image: {os.path.basename(fpath)})")
+            self._rerender_pixmaps()
+
+        elif chosen is act_mn:
+            if fpath:
+                self._annotation = ab_annotations.upsert_annotation(
+                    fpath, pip, meniscus_z=float(z_val)
+                )
+            self._status_lbl.setText(f"Annotated meniscus = {z_int} px  (image: {os.path.basename(fpath)})")
+            self._rerender_pixmaps()
+
+        elif chosen is act_clr_tb:
+            if fpath:
+                ab_annotations.clear_annotation_field(fpath, pip, "tip_bottom_z")
+                self._load_annotation_for_current()
+            self._status_lbl.setText("Cleared tip_bottom annotation.")
+            self._rerender_pixmaps()
+
+        elif chosen is act_clr_mn:
+            if fpath:
+                ab_annotations.clear_annotation_field(fpath, pip, "meniscus_z")
+                self._load_annotation_for_current()
+            self._status_lbl.setText("Cleared meniscus annotation.")
+            self._rerender_pixmaps()
+
+        elif act_opt is not None and chosen is act_opt:
+            self._run_optimize_for(preset_idx, entry)
+
+    def _on_optimize_clicked(self) -> None:
+        """Optimize button: pick the first checked preset that has rules."""
+        # Collect checked presets that have behavior_rules
+        candidates: List[tuple] = []   # (preset_idx, entry)
+        for idx, res in self._results.items():
+            entry = res.get("entry", {})
+            if entry.get("behavior_rules"):
+                candidates.append((idx, entry))
+
+        if not candidates:
+            self._status_lbl.setText(
+                "No checked presets have behavior_rules defined. "
+                "Add rules first via right-click → Edit behavior rules…"
+            )
+            return
+
+        ann = self._annotation
+        has_ann = ann and (ann.get("tip_bottom_z") is not None
+                           or ann.get("meniscus_z") is not None)
+        if not has_ann:
+            self._status_lbl.setText(
+                "No ground-truth annotation. "
+                "Right-click on a chart to mark tip_bottom / meniscus first."
+            )
+            return
+
+        # Use the first candidate (user can right-click for a specific one)
+        preset_idx, entry = candidates[0]
+        self._run_optimize_for(preset_idx, entry)
+
+    def _run_optimize_for(
+        self, preset_idx: int, entry: Dict[str, Any]
+    ) -> None:
+        """Start the optimizer for the given preset in a background thread."""
+        if self._optimizer_thread and self._optimizer_thread.isRunning():
+            self._status_lbl.setText("Optimizer already running…")
+            return
+
+        rules = list(entry.get("behavior_rules") or [])
+        if not rules:
+            self._status_lbl.setText("Preset has no behavior_rules to optimize.")
+            return
+
+        sig_data = self._cached_signal_data.get(preset_idx)
+        if sig_data is None:
+            self._status_lbl.setText("Run the comparison first to populate signal data.")
+            return
+
+        ann = self._annotation
+        if ann is None or (ann.get("tip_bottom_z") is None and ann.get("meniscus_z") is None):
+            self._status_lbl.setText(
+                "No annotation for the current image. "
+                "Right-click on the chart to mark tip_bottom / meniscus."
+            )
+            return
+
+        # Build signal list: primary + extra signals
+        z_axis = sig_data["z_axis"]
+        signals = [(sig_data["signal"], z_axis)]
+        for es in (sig_data.get("extra_signals") or []):
+            s = es.get("signal")
+            z = es.get("z_axis") if "z_axis" in es else z_axis
+            if s is not None and len(s) > 0:
+                signals.append((s, z))
+
+        annotations = [ann]   # single annotation for the current image
+        preset_id   = entry.get("id", "")
+        desc        = entry.get("description", f"preset {preset_idx + 1}")[:40]
+
+        self._optimize_btn.setEnabled(False)
+        self._status_lbl.setText(f'Optimizing "{desc}"…')
+
+        self._optimizer_thread = _RuleOptimizerThread(
+            preset_idx=preset_idx,
+            rules=rules,
+            signals=signals,
+            global_z_axis=z_axis,
+            annotations=annotations,
+            parent=self,
+        )
+        self._optimizer_thread.progress.connect(self._status_lbl.setText)
+        self._optimizer_thread.finished_result.connect(
+            lambda idx, res: self._on_optimize_finished(idx, res, entry)
+        )
+        self._optimizer_thread.error.connect(
+            lambda msg: self._on_optimize_error(msg)
+        )
+        self._optimizer_thread.start()
+
+    def _on_optimize_finished(
+        self,
+        preset_idx: int,
+        result: object,   # OptimizationResult
+        entry: Dict[str, Any],
+    ) -> None:
+        self._optimize_btn.setEnabled(bool(self._cached_signal_data))
+        preset_id = entry.get("id", "")
+        desc      = entry.get("description", f"preset {preset_idx + 1}")[:40]
+        self._status_lbl.setText(
+            f'"{desc}" — loss {result.initial_loss:.1f}→{result.final_loss:.1f} px '
+            f'in {result.iterations} iterations.  Rules saved.'
+        )
+        if preset_id:
+            ab_presets.update_behavior_rules(preset_id, result.optimized_rules)
+        # Update cached entry so a subsequent optimize uses the new rules
+        res = self._results.get(preset_idx)
+        if res:
+            res["entry"]["behavior_rules"] = result.optimized_rules
+
+    def _on_optimize_error(self, msg: str) -> None:
+        self._optimize_btn.setEnabled(bool(self._cached_signal_data))
+        self._status_lbl.setText(f"Optimize error: {msg}")
+
+
+# ---------------------------------------------------------------------------
+# Background optimizer thread
+# ---------------------------------------------------------------------------
+
+class _RuleOptimizerThread(QThread):
+    """Runs ``rule_optimizer.optimize_rules`` in a background thread."""
+
+    progress       = Signal(str)            # status updates during optimization
+    finished_result = Signal(int, object)   # (preset_idx, OptimizationResult)
+    error          = Signal(str)
+
+    def __init__(
+        self,
+        preset_idx: int,
+        rules: list,
+        signals: list,
+        global_z_axis: object,
+        annotations: list,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._preset_idx  = preset_idx
+        self._rules       = rules
+        self._signals     = signals
+        self._global_z    = global_z_axis
+        self._annotations = annotations
+        self._iter_count  = 0
+
+    def run(self) -> None:
+        try:
+            from pa.optimization.rule_optimizer import optimize_rules
+
+            def _cb(x):
+                self._iter_count += 1
+                if self._iter_count % 20 == 0:
+                    self.progress.emit(f"Optimizing… iteration {self._iter_count}")
+
+            result = optimize_rules(
+                rules=self._rules,
+                signals=self._signals,
+                global_z_axis=self._global_z,
+                annotations=self._annotations,
+                method="Nelder-Mead",
+                max_iter=400,
+                callback=_cb,
+            )
+            self.finished_result.emit(self._preset_idx, result)
+        except Exception as exc:
+            self.error.emit(str(exc))

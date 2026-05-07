@@ -70,6 +70,10 @@ class _ZoomableView(QGraphicsView):
     # Value is a 0.0–1.0 fraction of scene height; -1.0 on leave.
     row_hovered: Signal = Signal(float)
 
+    # Emitted on right-click when annotation_mode is True.
+    # Value is the 0.0–1.0 row fraction (scene height) at the click point.
+    row_right_clicked: Signal = Signal(float)
+
     def __init__(self, title: str, parent=None, stretch_fit: bool = False):
         super().__init__(parent)
         self._title = title
@@ -86,6 +90,8 @@ class _ZoomableView(QGraphicsView):
         self._crosshair_item = None    # horizontal line — synced across views
         self._crosshair_v_item = None  # vertical line   — local to this view
         self._user_zoomed = False
+        # When True, right-click emits row_right_clicked instead of the copy menu
+        self.annotation_mode: bool = False
         self._show_placeholder()
 
     def _show_placeholder(self):
@@ -195,7 +201,21 @@ class _ZoomableView(QGraphicsView):
         super().leaveEvent(event)
 
     def contextMenuEvent(self, event):
-        """Right-click menu: copy the current scene pixmap to the clipboard."""
+        """Right-click menu.
+
+        When ``annotation_mode`` is True the view emits ``row_right_clicked``
+        with the z-fraction and suppresses the copy menu so the caller can
+        show its own context menu.
+        """
+        if self.annotation_mode:
+            sr = self._scene.sceneRect()
+            if sr.isValid() and sr.height() > 0:
+                scene_pos = self.mapToScene(event.pos())
+                frac = max(0.0, min(1.0, (scene_pos.y() - sr.top()) / sr.height()))
+                self.row_right_clicked.emit(frac)
+            return
+
+        # Default: copy / save menu
         # Grab the pixmap from the first item in the scene (the composite
         # image+chart that was last set via set_pixmap).
         items = self._scene.items()
