@@ -31,12 +31,14 @@
         "contrast_bilateral_sigma_color": 75.0,
         "contrast_bilateral_sigma_space": 75.0,
         "contrast_min": 0.0,
-        "contrast_max": 100.0
+        "contrast_max": 100.0,
+        "ignore_top_rows": 10,
+        "ignore_bottom_rows": 10
       },
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.1,
           "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
@@ -63,12 +65,60 @@
         },
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.05,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
+        },
+        {
+          "trigger": "peak",
+          "min_prominence_frac": 0.005,
+		  "low_below_window_px": 20,
+		  "low_below_threshold_frac": 0.002,
+		  "low_below_min_strength": 0.0,
+          "smoothing_px": 3,
+          "target": "meniscus",
+          "strength": 1.0,
+          "spread_px": 10,
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -109,7 +159,7 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.05,
           "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
@@ -141,7 +191,25 @@
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -214,7 +282,25 @@
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -319,7 +405,39 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.1,
+		  "peak_side": "top",
+          "min_prominence_frac": 0.15,
+		  "low_above_window_px": 10,
+		  "low_above_threshold_frac": 0.20,
+		  "low_above_min_strength": 0.0,
+          "smoothing_px": 3,
+          "target": "meniscus",
+          "strength": 1.0,
+          "spread_px": 10,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ],
+          "value_min_strength": 0.9
+        },
+        {
+          "trigger": "peak",
+          "peak_side": "bottom",
+          "min_prominence_frac": 0.01,
 		  "low_below_window_px": 10,
 		  "low_below_threshold_frac": 0.15,
 		  "low_below_min_strength": 0.0,
@@ -343,60 +461,6 @@
             [
               1.0,
               1.0
-            ]
-          ],
-          "value_min_strength": 0.5
-        },
-        {
-          "trigger": "low_signal",
-          "threshold_frac": 0.2,
-          "smoothing_px": 3,
-          "target": "below_tip",
-          "strength": 0.5,
-          "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              0.0
-            ],
-            [
-              0.8,
-              0.0
-            ],
-            [
-              0.9,
-              1.0
-            ],
-            [
-              1.0,
-              1.0
-            ]
-          ],
-          "value_min_strength": 1
-        },
-        {
-          "trigger": "low_signal",
-          "threshold_frac": 0.2,
-          "smoothing_px": 3,
-          "target": "gas_in_tip",
-          "strength": 0.5,
-          "spread_px": 3,
-          "location_prior": [
-            [
-              0.0,
-              1.0
-            ],
-            [
-              0.8,
-              1.0
-            ],
-            [
-              0.9,
-              0.0
-            ],
-            [
-              1.0,
-              0.0
             ]
           ],
           "value_min_strength": 0.5
@@ -460,12 +524,30 @@
         },
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.1,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -676,6 +758,36 @@
         "contrast_max": 100.0
       },
       "behavior_rules": [
+	    {
+          "trigger": "rising_edge",
+          "threshold_frac": 0.15,
+          "smoothing_px": 5,
+          "spread_px": 4.0,
+          "pre_low_window_px": 15,
+          "pre_low_frac": 0.7,
+          "target": "tip_bottom",
+          "direction": 1,
+          "strength": 1.0,
+          "location_prior": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.8,
+              0.0
+            ],
+            [
+              0.9,
+              1.0
+            ],
+            [
+              1.0,
+              1.0
+            ]
+          ],
+          "spatial_modifier": {"type": "offset_below", "range_px": 2}
+	    },
         {
           "trigger": "peak",
           "min_prominence_frac": 0.2,
@@ -684,6 +796,23 @@
           "strength": 1.0,
           "spread_px": 10,
           "value_min_strength": 0.5
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
         }
       ]
     },
@@ -763,7 +892,25 @@
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -843,7 +990,25 @@
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -965,7 +1130,40 @@
         "ignore_bottom_rows": 10,
         "threshold": 0.5,
         "min_distance": 5
-      }
+      },
+      "behavior_rules": [
+        {
+          "trigger": "peak",
+		  "peak_side": "bottom",
+		  "low_below_window_px": 20,
+		  "low_below_threshold_frac": 0.15,
+		  "low_below_min_strength": 0.0,
+          "threshold_frac": 0.2,
+          "smoothing_px": 3,
+          "target": "meniscus",
+          "strength": 0.5,
+          "spread_px": 3,
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "20260505-141128-577b5d",
@@ -1008,6 +1206,37 @@
         "min_distance": 5
       },
       "behavior_rules": [
+        {
+          "trigger": "peak",
+		  "peak_side": "bottom",
+		  "low_below_window_px": 20,
+		  "low_below_threshold_frac": 0.15,
+		  "low_below_min_strength": 0.0,
+          "threshold_frac": 0.2,
+          "smoothing_px": 3,
+          "target": "meniscus",
+          "strength": 0.5,
+          "spread_px": 3,
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
+        },
         {
           "trigger": "low_signal",
           "threshold_frac": 0.2,
@@ -1232,7 +1461,7 @@
       "behavior_rules": [
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.1,
           "smoothing_px": 3,
           "target": "tip_bottom",
           "strength": 1.0,
@@ -1259,12 +1488,60 @@
         },
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.05,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
+        },
+        {
+          "trigger": "peak",
+          "min_prominence_frac": 0.005,
+		  "low_below_window_px": 20,
+		  "low_below_threshold_frac": 0.002,
+		  "low_below_min_strength": 0.0,
+          "smoothing_px": 3,
+          "target": "meniscus",
+          "strength": 1.0,
+          "spread_px": 10,
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -1334,12 +1611,30 @@
         },
         {
           "trigger": "peak",
-          "min_prominence_frac": 0.2,
+          "min_prominence_frac": 0.05,
           "smoothing_px": 3,
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -1383,7 +1678,7 @@
         {
           "trigger": "peak",
           "min_prominence_frac": 0.1,
-		  "low_below_window_px": 10,
+		  "low_below_window_px": 20,
 		  "low_below_threshold_frac": 0.15,
 		  "low_below_min_strength": 0.0,
           "smoothing_px": 3,
@@ -1417,7 +1712,28 @@
           "target": "meniscus",
           "strength": 1.0,
           "spread_px": 10,
-          "value_min_strength": 0.5
+          "value_min_strength": 0.5,
+		  "low_above_window_px": 20,
+		  "low_above_threshold_frac": 0.15,
+		  "low_above_min_strength": 0.0,
+          "location_prior": [
+            [
+              0.0,
+              1.0
+            ],
+            [
+              0.8,
+              1.0
+            ],
+            [
+              0.9,
+              0.0
+            ],
+            [
+              1.0,
+              0.0
+            ]
+          ]
         }
       ]
     },
@@ -1473,7 +1789,7 @@
         },
         {
           "trigger": "peak",
-		  "low_above_window_px": 10,
+		  "low_above_window_px": 20,
 		  "low_above_threshold_frac": 0.15,
 		  "low_above_min_strength": 0.0,
           "min_prominence_frac": 0.1,

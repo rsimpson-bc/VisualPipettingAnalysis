@@ -45,7 +45,7 @@ Rule schema (JSON-compatible dict)
 -----------------------------------
 Each rule has the following keys:
 
-    trigger (str)        – one of: "peak" | "high_signal" | "low_signal"
+    trigger (str)        – one of: "peak" | "high_signal" | "low_signal" | "rising_edge"
     target (str)         – state or boundary to vote for:
                            "gas_in_tip" | "liquid_in_tip" | "below_tip" |
                            "tip_bottom" | "meniscus"
@@ -65,6 +65,26 @@ Each rule has the following keys:
                                       default 0.3 (high) / 0.3 (low, from top)
         smoothing_px (int)          – rolling average window; default 5
         spread_px (float)           – σ to smear the per-row activation; default 3.0
+
+    For trigger "rising_edge":
+        threshold_frac (float)      – threshold as a fraction of signal range.
+                                      A crossing is detected when the smoothed
+                                      signal rises from below to at or above
+                                      sig_min + threshold_frac * sig_range.
+                                      default 0.3
+        smoothing_px (int)          – pre-smoothing window; default 5
+        spread_px (float)           – σ of Gaussian applied to the impulse;
+                                      default 5.0
+        pre_low_window_px (int)     – if > 0, the N rows immediately before
+                                      each crossing are inspected; the crossing
+                                      is weighted by the fraction of those rows
+                                      that are below the threshold (confirms a
+                                      genuine low→high transition); default 0
+                                      (disabled)
+        pre_low_frac (float)        – minimum fraction of the pre-window that
+                                      must be below threshold; crossings below
+                                      this fraction are suppressed; default 0.5
+                                      (only used when pre_low_window_px > 0)
 
     spatial_modifier (dict | None)  – optional shift applied to the activation:
         {"type": "offset_below", "range_px": N}
@@ -288,6 +308,23 @@ def _trigger_peak(
         *below* the peak (rows ``i + 1 … i + window``).  Use this when the
         target boundary sits immediately above a quiescent zone (e.g. a peak
         just before the signal drops to zero at the tip bottom).
+
+    ``high_above_window_px`` / ``high_above_threshold_frac`` / ``high_above_min_strength``
+        Boost peaks that *are* immediately below a high-signal zone.
+        For each candidate peak at row *i*, the fraction of the
+        ``high_above_window_px`` rows immediately above it whose smoothed
+        value is ≥ ``sig_min + high_above_threshold_frac × sig_range`` is
+        computed as *high_frac*.  The weight is multiplied by:
+
+            high_frac × (1 − high_above_min_strength) + high_above_min_strength
+
+        ``high_above_min_strength = 0.0``: hard gate — only peaks beneath a
+        high-signal zone survive.  ``= 1.0``: disabled (default).
+        Setting ``high_above_window_px = 0`` (default) disables the modifier.
+
+    ``high_below_window_px`` / ``high_below_threshold_frac`` / ``high_below_min_strength``
+        Mirror of ``high_above_*``, looking at rows *below* the peak.
+        Boosts peaks that sit immediately above a high-signal zone.
     """
     from scipy.signal import find_peaks as _sp_peaks
 
@@ -302,6 +339,12 @@ def _trigger_peak(
     low_below_window      = int(rule.get("low_below_window_px", 0))
     low_below_thresh_frac = float(rule.get("low_below_threshold_frac", 0.3))
     low_below_min_str     = float(rule.get("low_below_min_strength", 0.0))
+    high_above_window     = int(rule.get("high_above_window_px", 0))
+    high_above_thresh_frac = float(rule.get("high_above_threshold_frac", 0.7))
+    high_above_min_str    = float(rule.get("high_above_min_strength", 1.0))
+    high_below_window     = int(rule.get("high_below_window_px", 0))
+    high_below_thresh_frac = float(rule.get("high_below_threshold_frac", 0.7))
+    high_below_min_str    = float(rule.get("high_below_min_strength", 1.0))
 
     # Guard: if the original signal is constant there are no real peaks
     orig_range = float(signal.max()) - float(signal.min())
@@ -325,6 +368,10 @@ def _trigger_peak(
     use_low_above  = (low_above_window > 0 and low_above_min_str < 1.0)
     low_below_abs  = sig_min + low_below_thresh_frac * sig_range
     use_low_below  = (low_below_window > 0 and low_below_min_str < 1.0)
+    high_above_abs = sig_min + high_above_thresh_frac * sig_range
+    use_high_above = (high_above_window > 0 and high_above_min_str < 1.0)
+    high_below_abs = sig_min + high_below_thresh_frac * sig_range
+    use_high_below = (high_below_window > 0 and high_below_min_str < 1.0)
 
     def _peak_weight(idx: int, raw_score: float) -> float:
         """Chain all per-peak multipliers and return the final weight."""
@@ -348,6 +395,20 @@ def _trigger_peak(
             below = s[idx + 1:end]
             low_frac = float(np.sum(below <= low_below_abs)) / max(1, len(below))
             w *= low_frac * (1.0 - low_below_min_str) + low_below_min_str
+
+        # high_above: prefer peaks that are immediately below a high-signal zone
+        if use_high_above:
+            start = max(0, idx - high_above_window)
+            above = s[start:idx]
+            high_frac = float(np.sum(above >= high_above_abs)) / max(1, len(above))
+            w *= high_frac * (1.0 - high_above_min_str) + high_above_min_str
+
+        # high_below: prefer peaks that are immediately above a high-signal zone
+        if use_high_below:
+            end = min(n, idx + high_below_window + 1)
+            below = s[idx + 1:end]
+            high_frac = float(np.sum(below >= high_below_abs)) / max(1, len(below))
+            w *= high_frac * (1.0 - high_below_min_str) + high_below_min_str
 
         return w
 
@@ -431,10 +492,85 @@ def _trigger_low_signal(
     return _smear(activation, spread_px)
 
 
+def _trigger_rising_edge(
+    signal: np.ndarray,
+    rule: Dict[str, Any],
+) -> np.ndarray:
+    """
+    Detects the leading edge of an upward threshold crossing.
+
+    Rather than locating the peak of a spike (which shifts with spike
+    amplitude), this places a focused impulse at the row where the smoothed
+    signal first crosses from below to at-or-above
+    ``sig_min + threshold_frac * sig_range``.  The impulse weight is
+    proportional to the magnitude of the crossing (how far above the
+    threshold the signal lands), so strong spikes score higher than weak ones.
+
+    Parameters
+    ----------
+    threshold_frac : float
+        Fraction of signal range that defines the crossing level.
+        Default 0.3.
+    smoothing_px : int
+        Pre-smoothing window (rolling average).  Default 5.
+    spread_px : float
+        σ of Gaussian applied to each crossing impulse.  Default 5.0.
+    pre_low_window_px : int
+        If > 0, the ``pre_low_window_px`` rows immediately before each
+        crossing are inspected.  The crossing weight is multiplied by the
+        fraction of those rows that are below the threshold, so crossings
+        that did not come from a genuine low region are down-weighted.
+        Default 0 (disabled).
+    pre_low_frac : float
+        Minimum fraction of the pre-window that must be below threshold for
+        the crossing to survive (others are zeroed out).
+        Only used when ``pre_low_window_px > 0``.  Default 0.5.
+    """
+    smoothing          = int(rule.get("smoothing_px", 5))
+    threshold_frac     = float(rule.get("threshold_frac", 0.3))
+    spread_px          = float(rule.get("spread_px", 5.0))
+    pre_low_window     = int(rule.get("pre_low_window_px", 0))
+    pre_low_frac_min   = float(rule.get("pre_low_frac", 0.5))
+
+    orig_range = float(signal.max()) - float(signal.min())
+    if orig_range < 1e-9:
+        return np.zeros(len(signal), dtype=np.float32)
+
+    s = _smooth(signal, smoothing).astype(np.float32)
+    sig_range = float(s.max() - s.min())
+    if sig_range < 1e-9:
+        return np.zeros(len(signal), dtype=np.float32)
+
+    threshold = float(s.min()) + threshold_frac * sig_range
+    n = len(s)
+    below = s < threshold
+
+    activation = np.zeros(n, dtype=np.float32)
+    for i in range(1, n):
+        if below[i - 1] and not below[i]:
+            # Crossing found at row i
+            # Weight = how far above the threshold the signal lands
+            weight = (float(s[i]) - threshold) / sig_range
+
+            # Optional pre-window gate: must have been genuinely low before
+            if pre_low_window > 0:
+                start = max(0, i - pre_low_window)
+                pre_slice = below[start:i]
+                frac_low = float(np.sum(pre_slice)) / max(1, len(pre_slice))
+                if frac_low < pre_low_frac_min:
+                    continue
+                weight *= frac_low
+
+            activation[i] = max(weight, 0.0)
+
+    return _smear(activation, spread_px)
+
+
 _TRIGGER_FNS = {
-    "peak":        _trigger_peak,
-    "high_signal": _trigger_high_signal,
-    "low_signal":  _trigger_low_signal,
+    "peak":         _trigger_peak,
+    "high_signal":  _trigger_high_signal,
+    "low_signal":   _trigger_low_signal,
+    "rising_edge":  _trigger_rising_edge,
 }
 
 

@@ -37,13 +37,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGraphicsScene, QGraphicsView, QGroupBox, QHBoxLayout, QLabel,
+    QFormLayout, QFrame, QGraphicsScene, QGraphicsView, QGroupBox,
+    QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QMenu, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget,
     QWidgetAction, QSplitter,
 )
 
 from pa_gui.analysis import ab_annotations, ab_presets
+from pa_gui.analysis.rule_editor_dialog import BehaviorRulesEditorDialog
 from pa_gui.analysis.ab_compare_dialog import (
     _ZoomableView,
     _ndarray_to_pixmap,
@@ -294,6 +296,11 @@ class ModeCompareDialog(QDialog):
         self._cached_signal_data:   Dict[int, dict]  = {}   # pre-offset per-preset data
         self._cached_strip_display_w: int = _IMG_W
         self._cached_strip:         Optional[object] = None
+        # Per-tip strip data (All Tips mode): key = tip idx
+        self._cached_strips:        Dict[int, dict]  = {}  # {idx: {strip, src_bgr, ctr_bgr, bbox, strip_w, roi1_pts}}
+        self._strip_panels:         List[object]     = []  # all _StripPanel instances
+        # Per-tip interpretation z ranges (All Tips mode); None in normal mode
+        self._cached_per_tip_interp_z_ranges: Optional[Dict[int, tuple]] = None
         # Map chart panel preset_idx → QListWidget row for hover highlight
         self._panel_list_row:       Dict[int, int]   = {}
 
@@ -330,6 +337,8 @@ class ModeCompareDialog(QDialog):
         self._cached_combined_interp: Optional[Dict[str, Any]] = None
         # Reference to the combined chart panel (preset_idx == -1)
         self._combined_panel: Optional[_ChartPanel] = None
+        # All Tips mode: show all 8 tips for one preset instead of many presets
+        self._all_tips_mode: bool = False
 
         self._setup_ui()
         self._populate_preset_list()
@@ -377,7 +386,7 @@ class ModeCompareDialog(QDialog):
         self._pipette_spin = QSpinBox()
         self._pipette_spin.setRange(1, 32)
         self._pipette_spin.setValue(1)
-        self._pipette_spin.setFixedWidth(64)
+        self._pipette_spin.setFixedWidth(72)
         self._pipette_spin.valueChanged.connect(self._on_pipette_changed)
         top.addWidget(self._pipette_spin)
 
@@ -389,6 +398,28 @@ class ModeCompareDialog(QDialog):
             top.addWidget(btn)
             self._pipette_btns.append(btn)
         self._refresh_pipette_buttons()
+
+        top.addSpacing(4)
+        self._all_tips_btn = QPushButton("All Tips")
+        self._all_tips_btn.setCheckable(True)
+        self._all_tips_btn.setChecked(False)
+        self._all_tips_btn.setFixedHeight(22)
+        self._all_tips_btn.setToolTip(
+            "Show all 8 tips for the selected preset side-by-side.\n"
+            "Exactly one preset must be checked.\n"
+            "The pipette selector is disabled in this mode."
+        )
+        self._all_tips_btn.clicked.connect(self._on_all_tips_toggled)
+        top.addWidget(self._all_tips_btn)
+
+        top.addSpacing(4)
+        self._images_btn = QPushButton("Images")
+        self._images_btn.setCheckable(True)
+        self._images_btn.setChecked(True)
+        self._images_btn.setFixedHeight(22)
+        self._images_btn.setToolTip("Show / hide the image strip columns")
+        self._images_btn.clicked.connect(self._on_images_toggled)
+        top.addWidget(self._images_btn)
 
         top.addStretch()
 
@@ -520,7 +551,6 @@ class ModeCompareDialog(QDialog):
         top.addWidget(_overlay_btn)
 
         top.addSpacing(8)
-        top.addWidget(QLabel("Graph w:"))
         self._chart_w_spin = QSpinBox()
         self._chart_w_spin.setRange(60, 600)
         self._chart_w_spin.setValue(_CHART_W)
@@ -528,7 +558,40 @@ class ModeCompareDialog(QDialog):
         self._chart_w_spin.setFixedWidth(84)
         self._chart_w_spin.setToolTip("Chart column width in pixels")
         self._chart_w_spin.valueChanged.connect(self._on_display_option_changed)
-        top.addWidget(self._chart_w_spin)
+
+        self._band_w_spin = QSpinBox()
+        self._band_w_spin.setRange(4, 80)
+        self._band_w_spin.setValue(8)
+        self._band_w_spin.setSingleStep(4)
+        self._band_w_spin.setFixedWidth(80)
+        self._band_w_spin.setToolTip(
+            "Width of the state-colour band on the left edge of each chart.\n"
+            "\u25a0 Cyan/teal  = gas in tip (above meniscus)\n"
+            "\u25a0 Green      = liquid in tip\n"
+            "\u25a0 Red/orange = below tip (shank region)"
+        )
+        self._band_w_spin.valueChanged.connect(self._on_display_option_changed)
+
+        _ly_widget = QWidget()
+        _ly_form = QFormLayout(_ly_widget)
+        _ly_form.setContentsMargins(8, 6, 8, 6)
+        _ly_form.setSpacing(6)
+        _ly_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        _ly_form.addRow("Graph w:", self._chart_w_spin)
+        _ly_form.addRow("Band w:",  self._band_w_spin)
+        _ly_menu = QMenu(self)
+        _ly_action = QWidgetAction(_ly_menu)
+        _ly_action.setDefaultWidget(_ly_widget)
+        _ly_menu.addAction(_ly_action)
+        _ly_btn = QToolButton()
+        _ly_btn.setText("Layout")
+        _ly_btn.setMenu(_ly_menu)
+        _ly_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        _ly_btn.setToolTip(
+            "Graph w: chart column width in pixels\n"
+            "Band w:  state-colour band width in pixels"
+        )
+        top.addWidget(_ly_btn)
 
         top.addSpacing(8)
         self._status_lbl = QLabel("")
@@ -587,6 +650,7 @@ class ModeCompareDialog(QDialog):
         self._preset_list.customContextMenuRequested.connect(
             self._on_preset_list_context_menu
         )
+        self._preset_list.itemChanged.connect(self._on_preset_item_changed)
         left_lay.addWidget(self._preset_list, 1)
 
         sel_row = QHBoxLayout()
@@ -764,13 +828,15 @@ class ModeCompareDialog(QDialog):
 
         menu = QMenu(self)
 
-        # ── Edit behavior rules (only when a real preset item is clicked) ──
+        # ── Edit behavior rules / Rename (only when a real preset item is clicked) ──
         clicked_entry = None
         if clicked_item is not None:
             clicked_entry = clicked_item.data(Qt.ItemDataRole.UserRole)
         act_edit_rules = None
+        act_rename = None
         if clicked_entry is not None:   # not a header
             desc = clicked_entry.get("description", "preset")
+            act_rename = menu.addAction(f'Rename…  "{desc[:40]}"')
             act_edit_rules = menu.addAction(
                 f'Edit behavior rules…  "{desc[:40]}"'
             )
@@ -789,8 +855,10 @@ class ModeCompareDialog(QDialog):
 
         if chosen is None:
             return
-        if act_edit_rules is not None and chosen is act_edit_rules:
-            self._open_behavior_rules_in_editor(clicked_entry)
+        if act_rename is not None and chosen is act_rename:
+            self._on_rename_preset_item(clicked_item, clicked_entry)
+        elif act_edit_rules is not None and chosen is act_edit_rules:
+            self._open_behavior_rules_gui(clicked_entry)
         elif act_mode is not None and chosen is act_mode:
             # Check only presets belonging to this mode; uncheck all others
             current_mode_header = False
@@ -807,6 +875,29 @@ class ModeCompareDialog(QDialog):
             self._select_all()
         elif chosen is act_clear:
             self._clear_all()
+
+    def _open_behavior_rules_gui(self, entry: dict) -> None:
+        """Open the GUI behavior-rules editor dialog for *entry*.
+
+        Changes made in the dialog trigger a live re-render (debounced 250 ms).
+        "Save & Close" persists to disk; "Discard & Close" reverts in-memory.
+        """
+        def _on_rules_changed(rules):
+            """Called by the dialog when any field changes (debounced)."""
+            # Patch the in-memory entry for the result that owns this preset
+            preset_id = entry.get("id")
+            for res in self._results.values():
+                if res.get("entry", {}).get("id") == preset_id:
+                    res["entry"]["behavior_rules"] = rules
+            # Also patch cached signal data entries that carry behavior_rules
+            self._recompute_interpretations()
+            self._rerender_pixmaps()
+
+        dlg = BehaviorRulesEditorDialog(entry, _on_rules_changed, parent=self)
+        dlg.exec()
+        # After close (save or discard) reload the presets list so that any
+        # name/rules change is reflected in the sidebar.
+        self._reload_presets()
 
     def _open_behavior_rules_in_editor(self, entry: dict) -> None:
         """
@@ -848,6 +939,31 @@ class ModeCompareDialog(QDialog):
             )
         except Exception as exc:
             self._status_lbl.setText(f"Could not open editor: {exc}")
+
+    def _on_rename_preset_item(self, item, entry: dict) -> None:
+        """Prompt the user for a new name and update the preset on disk."""
+        from PySide6.QtWidgets import QInputDialog
+        current = entry.get("description", "")
+        new_desc, ok = QInputDialog.getText(
+            self,
+            "Rename preset",
+            "New description:",
+            text=current,
+        )
+        if not ok:
+            return
+        new_desc = new_desc.strip()
+        if new_desc == current.strip():
+            return
+        try:
+            ab_presets.rename_preset(entry["id"], new_desc)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Rename failed", str(exc))
+            return
+        # Update in-memory entry so cached results stay consistent
+        entry["description"] = new_desc
+        self._reload_presets()
 
     def _reload_presets(self) -> None:
         """Re-read ab_presets.json and rebuild the preset list, preserving
@@ -1037,6 +1153,86 @@ class ModeCompareDialog(QDialog):
                 )
 
     # ------------------------------------------------------------------
+    # All Tips mode
+    # ------------------------------------------------------------------
+
+    def _on_all_tips_toggled(self, checked: bool) -> None:
+        """Toggle All Tips mode.  Guard: exactly one preset must be checked."""
+        if checked:
+            entries = self._selected_entries()
+            if len(entries) != 1:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "All Tips — single preset required",
+                    "All Tips mode requires exactly one preset selected.\n\n"
+                    f"Currently {len(entries)} preset(s) are checked.\n"
+                    "Please select exactly one preset, then click All Tips.",
+                )
+                self._all_tips_btn.setChecked(False)
+                return
+        self._all_tips_mode = checked
+        # Disable the per-tip pipette selector while All Tips is active
+        self._pipette_spin.setEnabled(not checked)
+        for btn in self._pipette_btns:
+            btn.setEnabled(not checked)
+        # Clear stale results so the next Run starts fresh
+        if checked:
+            self._results = {}
+            self._clear_panels()
+
+    def _on_preset_item_changed(self, item) -> None:
+        """When All Tips is active, block a second preset from being checked."""
+        if not self._all_tips_mode:
+            return
+        if item.data(Qt.ItemDataRole.UserRole) is None:
+            return  # header row
+        if item.checkState() != Qt.CheckState.Checked:
+            return  # unchecking is always allowed
+        # Count checked presets; if >1 reject and warn
+        checked_rows = [
+            i for i in range(self._preset_list.count())
+            if (self._preset_list.item(i).data(Qt.ItemDataRole.UserRole) is not None
+                and self._preset_list.item(i).checkState() == Qt.CheckState.Checked)
+        ]
+        if len(checked_rows) > 1:
+            self._preset_list.blockSignals(True)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self._preset_list.blockSignals(False)
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "All Tips mode",
+                "All Tips mode requires exactly one preset selected.\n\n"
+                "Uncheck the current preset before selecting a different one.",
+            )
+
+    def _on_images_toggled(self, checked: bool) -> None:
+        """Show / hide all image strip panels and update the scroll min-width."""
+        for strip in self._strip_panels:
+            strip.setVisible(checked)
+        # Recalculate min-width so the scrollbar adjusts
+        chart_w = self._chart_w_spin.value()
+        margins = self._panels_layout.contentsMargins()
+        sp      = self._panels_layout.spacing()
+        n_charts = len([p for p in self._chart_panels if p.isVisible()])
+        if self._all_tips_mode:
+            strip_total_w = (
+                sum(sd["strip_w"] for sd in self._cached_strips.values())
+                if checked else 0
+            )
+            n_strips = len(self._cached_strips) if checked else 0
+        else:
+            strip_total_w = self._cached_strip_display_w if checked else 0
+            n_strips = 1 if checked and self._cached_strip is not None else 0
+        content_w = (
+            margins.left() + margins.right()
+            + strip_total_w + n_strips * sp
+            + n_charts * chart_w + max(0, n_charts - 1) * sp
+        )
+        self._panels_container.setMinimumWidth(content_w)
+
+    # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
 
@@ -1045,33 +1241,60 @@ class ModeCompareDialog(QDialog):
             self._status_lbl.setText("Select an image first.")
             return
 
-        entries = self._selected_entries()
-        if not entries:
-            self._status_lbl.setText("Check at least one preset.")
-            return
-
         if self._worker and self._worker.isRunning():
             self._worker.requestInterruption()
             self._worker.wait(2000)
 
         self._results = {}
-        self._running_entries = entries  # snapshot for callbacks
         self._clear_panels()
 
-        frame_idx    = max(0, self._frame_combo.currentIndex())
-        pipette_idx  = self._pipette_spin.value() - 1
+        frame_idx = max(0, self._frame_combo.currentIndex())
 
-        # Mode name for the worker is just a fallback; _run_one will use entry["mode"]
-        self._worker = ModeCompareWorker(
-            mode_name=entries[0].get("mode", self._mode_name) if entries else self._mode_name,
-            preset_entries=entries,
-            image_paths=self._image_paths,
-            reference_paths=self._reference_paths,
-            frame_index=frame_idx,
-            pipette_index=pipette_idx,
-            instrument_config_path=self._instrument_config_path,
-            parent=self,
-        )
+        if self._all_tips_mode:
+            # All Tips: run the same preset for each of the 8 tips.
+            entries = self._selected_entries()
+            if len(entries) != 1:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "All Tips — single preset required",
+                    "All Tips mode requires exactly one preset selected.\n\n"
+                    f"Currently {len(entries)} preset(s) are checked.\n"
+                    "Please select exactly one preset, then click Run.",
+                )
+                return
+            run_entries = [entries[0]] * 8
+            per_pip     = list(range(8))
+            self._running_entries = run_entries
+            self._worker = ModeCompareWorker(
+                mode_name=entries[0].get("mode", self._mode_name),
+                preset_entries=run_entries,
+                image_paths=self._image_paths,
+                reference_paths=self._reference_paths,
+                frame_index=frame_idx,
+                pipette_index=0,
+                instrument_config_path=self._instrument_config_path,
+                per_entry_pipette=per_pip,
+                parent=self,
+            )
+        else:
+            entries = self._selected_entries()
+            if not entries:
+                self._status_lbl.setText("Check at least one preset.")
+                return
+            pipette_idx = self._pipette_spin.value() - 1
+            self._running_entries = entries  # snapshot for callbacks
+            # Mode name for the worker is just a fallback; _run_one will use entry["mode"]
+            self._worker = ModeCompareWorker(
+                mode_name=entries[0].get("mode", self._mode_name) if entries else self._mode_name,
+                preset_entries=entries,
+                image_paths=self._image_paths,
+                reference_paths=self._reference_paths,
+                frame_index=frame_idx,
+                pipette_index=pipette_idx,
+                instrument_config_path=self._instrument_config_path,
+                parent=self,
+            )
         self._worker.progress.connect(self._on_progress)
         self._worker.preset_done.connect(self._on_preset_done)
         self._worker.all_done.connect(self._on_all_done)
@@ -1095,8 +1318,30 @@ class ModeCompareDialog(QDialog):
         show_poi  = self._poi_chk.isChecked()
         chart_w   = self._chart_w_spin.value()
 
-        # Strip
-        if self._cached_strip is not None and self._cached_src_bgr is not None:
+        # Strip(s)
+        if self._all_tips_mode:
+            # All Tips: re-render each tip's strip independently
+            for idx, sd in self._cached_strips.items():
+                if sd["src_bgr"] is None:
+                    continue
+                z_min, z_max = self._cached_z_range
+                strip_pm = self._make_strip_pixmap(
+                    sd["src_bgr"], z_min, z_max,
+                    _DISPLAY_H, sd["strip_w"], sd["bbox"],
+                    roi1_points=sd["roi1_pts"] if show_roi1 else None,
+                )
+                ctr_pm = None
+                if sd["ctr_bgr"] is not None:
+                    ctr_pm = self._make_strip_pixmap(
+                        sd["ctr_bgr"], z_min, z_max,
+                        _DISPLAY_H, sd["strip_w"], sd["bbox"],
+                        roi1_points=sd["roi1_pts"] if show_roi1 else None,
+                    )
+                strip_pm = self._draw_interp_on_strip(strip_pm, tip_idx=idx)
+                if ctr_pm is not None:
+                    ctr_pm = self._draw_interp_on_strip(ctr_pm, tip_idx=idx)
+                sd["strip"].set_images(strip_pm, ctr_pm)
+        elif self._cached_strip is not None and self._cached_src_bgr is not None:
             z_min, z_max = self._cached_z_range
             strip_pm = self._make_strip_pixmap(
                 self._cached_src_bgr, z_min, z_max,
@@ -1164,10 +1409,21 @@ class ModeCompareDialog(QDialog):
             # Count only visible panels for min-width
             visible_panels = [p for p in self._chart_panels if p.isVisible()]
             n = len(visible_panels)
+            show_images = self._images_btn.isChecked()
+            if self._all_tips_mode:
+                strip_total_w = (
+                    sum(sd["strip_w"] for sd in self._cached_strips.values())
+                    if show_images else 0
+                )
+                n_strips = len(self._cached_strips) if show_images else 0
+            else:
+                strip_total_w = self._cached_strip_display_w if show_images else 0
+                n_strips = 1 if show_images and self._cached_strip is not None else 0
             content_w = (
                 margins.left() + margins.right()
-                + self._cached_strip_display_w
-                + sp + n * chart_w
+                + strip_total_w
+                + n_strips * sp
+                + n * chart_w
                 + max(0, n - 1) * sp
             )
             self._panels_container.setMinimumWidth(content_w)
@@ -1191,9 +1447,12 @@ class ModeCompareDialog(QDialog):
 
     def _on_all_done(self):
         self._run_btn.setEnabled(True)
-        self._status_lbl.setText(
-            f"Done — {len(self._results)} preset(s) compared."
-        )
+        if self._all_tips_mode:
+            self._status_lbl.setText("Done — all 8 tips.")
+        else:
+            self._status_lbl.setText(
+                f"Done — {len(self._results)} preset(s) compared."
+            )
         try:
             self._render_all()
         except Exception as exc:
@@ -1217,7 +1476,11 @@ class ModeCompareDialog(QDialog):
         self._all_views.clear()
         self._chart_panels.clear()
         self._panel_list_row.clear()
+        self._strip_panels.clear()
         self._combined_panel = None
+        self._cached_strip = None
+        self._cached_strips.clear()
+        self._cached_per_tip_interp_z_ranges = None
         self._panels_container.setMinimumWidth(0)
         # Remove all widgets except the trailing stretch
         while self._panels_layout.count() > 1:
@@ -1280,6 +1543,8 @@ class ModeCompareDialog(QDialog):
         # absolute z coordinates automatically gives the right calibrated offset.
         interp_z_min: float = global_z_min
         interp_z_max: float = global_z_max
+        # In All Tips mode each tip has its own valid window — compute per-tip.
+        per_tip_interp_z_ranges: Dict[int, tuple] = {}
         for idx, sig_stage in signal_stages.items():
             entry  = self._results[idx].get("entry", {})
             params = entry.get("params_b", {})
@@ -1288,10 +1553,18 @@ class ModeCompareDialog(QDialog):
             roi_y  = roi_y_offsets.get(idx, 0.0)
             z_full = sig_stage.z_axis_px + roi_y  # full-image coords, same length as signal
             n_rows = len(z_full)
+            tip_iz_min = float(z_full[0])
+            tip_iz_max = float(z_full[-1])
             if ignore_top > 0 and n_rows > ignore_top:
-                interp_z_min = max(interp_z_min, float(z_full[ignore_top]))
+                tip_iz_min = float(z_full[ignore_top])
             if ignore_bottom > 0 and n_rows > ignore_bottom:
-                interp_z_max = min(interp_z_max, float(z_full[n_rows - 1 - ignore_bottom]))
+                tip_iz_max = float(z_full[n_rows - 1 - ignore_bottom])
+            if tip_iz_min < tip_iz_max:
+                per_tip_interp_z_ranges[idx] = (tip_iz_min, tip_iz_max)
+            # For the shared (normal-mode) intersection range, aggregate as before
+            if not self._all_tips_mode:
+                interp_z_min = max(interp_z_min, tip_iz_min)
+                interp_z_max = min(interp_z_max, tip_iz_max)
         if interp_z_min >= interp_z_max:
             # Degenerate — fall back to the full range
             interp_z_range: tuple = z_range
@@ -1334,135 +1607,275 @@ class ModeCompareDialog(QDialog):
         # Render pixmaps at _DISPLAY_H; fitInView scales them at display time.
         display_h = _DISPLAY_H
 
-        strip_pm:   Optional[QPixmap] = None
-        strip_ctr_pm: Optional[QPixmap] = None
-
-        if src_bgr is not None:
-            strip_pm    = self._make_strip_pixmap(src_bgr,  global_z_min, global_z_max,
-                                                  display_h, strip_display_w, _bbox_src)
-        if ctr_bgr is not None:
-            strip_ctr_pm = self._make_strip_pixmap(ctr_bgr, global_z_min, global_z_max,
-                                                   display_h, strip_display_w, _bbox_src)
-
-        # ── 3. Create strip panel ──────────────────────────────────────────
-        strip = _StripPanel()
-        strip.setFixedWidth(strip_display_w)   # initial width; resizeEvent adjusts it
-        strip.set_aspect_ratio(strip_display_w / max(1, display_h))
-        # No setFixedHeight — height fills the scroll area viewport
-        self._panels_layout.insertWidget(
-            self._panels_layout.count() - 1,  # before trailing stretch
-            strip,
-        )
-        strip.set_images(strip_pm, strip_ctr_pm)
-        self._all_views.append(strip.view)
-        strip.view.row_hovered.connect(self._on_row_hovered)
-
-        # ── 4. Create a chart panel per preset (in selection order) ───────
+        # ── 3. Create strip panel(s) + chart panels ────────────────────────
         show_poi  = self._poi_chk.isChecked()
         show_roi1 = self._roi1_chk.isChecked()
         self._chart_w = self._chart_w_spin.value()
         self._cached_signal_data = {}
-        for idx in sorted(self._results.keys()):
-            res = self._results[idx]
-            sig_stage = signal_stages.get(idx)
-            if sig_stage is None:
-                continue
+        show_images = self._images_btn.isChecked()
 
-            entry = res["entry"]
-            desc  = entry.get("description", f"Preset {idx + 1}")
+        if self._all_tips_mode:
+            # ── ALL TIPS: one strip + one chart per tip, interleaved ───────
+            for idx in sorted(self._results.keys()):
+                res = self._results[idx]
+                sig_stage = signal_stages.get(idx)
+                if sig_stage is None:
+                    continue
 
-            # Offset z values from ROI-local to full-image coordinates so all
-            # presets (possibly with different roi_expansion_px) align correctly.
-            roi_y = roi_y_offsets.get(idx, 0.0)
-            z_axis_full = sig_stage.z_axis_px + roi_y
-            poi_z_full = (
-                [p + roi_y for p in sig_stage.poi_z_px]
-                if sig_stage.poi_z_px else None
+                desc = f"Tip {idx + 1}"
+
+                # Resolve per-tip bbox from this result's stages
+                tip_bbox = None
+                for s in res["stages"]:
+                    bb = s.metadata.get("display_bbox")
+                    if bb is not None:
+                        tip_bbox = bb
+                        break
+                if tip_bbox is None:
+                    tip_bbox = res.get("roi_bbox")
+
+                tip_strip_w = _IMG_W
+                if tip_bbox is not None:
+                    _bx, _by, _bw, _bh = tip_bbox
+                    tip_strip_w = max(60, min(_bw, 400))
+
+                tip_src_bgr = res.get("source")
+                tip_ctr_bgr = res.get("contrast")
+
+                tip_roi1_pts = None
+                for s in res["stages"]:
+                    pts = s.metadata.get("roi1_points")
+                    if pts:
+                        tip_roi1_pts = pts
+                        break
+
+                tip_strip_pm = None
+                tip_strip_ctr = None
+                if tip_src_bgr is not None:
+                    tip_strip_pm = self._make_strip_pixmap(
+                        tip_src_bgr, global_z_min, global_z_max,
+                        display_h, tip_strip_w, tip_bbox,
+                        roi1_points=tip_roi1_pts if show_roi1 else None,
+                    )
+                if tip_ctr_bgr is not None:
+                    tip_strip_ctr = self._make_strip_pixmap(
+                        tip_ctr_bgr, global_z_min, global_z_max,
+                        display_h, tip_strip_w, tip_bbox,
+                        roi1_points=tip_roi1_pts if show_roi1 else None,
+                    )
+
+                strip = _StripPanel()
+                strip.setFixedWidth(tip_strip_w)
+                strip.set_aspect_ratio(tip_strip_w / max(1, display_h))
+                strip.setVisible(show_images)
+                self._panels_layout.insertWidget(
+                    self._panels_layout.count() - 1, strip
+                )
+                strip.set_images(tip_strip_pm, tip_strip_ctr)
+                self._all_views.append(strip.view)
+                strip.view.row_hovered.connect(self._on_row_hovered)
+                self._strip_panels.append(strip)
+                _zmin, _zmax = z_range
+                strip.view.coord_formatter = (
+                    lambda rf, cf, zm=_zmin, zs=_zmax - _zmin:
+                        f"z: {zm + rf * zs:.1f} px"
+                )
+
+                self._cached_strips[idx] = {
+                    "strip":    strip,
+                    "src_bgr":  tip_src_bgr,
+                    "ctr_bgr":  tip_ctr_bgr,
+                    "bbox":     tip_bbox,
+                    "strip_w":  tip_strip_w,
+                    "roi1_pts": tip_roi1_pts,
+                }
+
+                # Chart
+                roi_y = roi_y_offsets.get(idx, 0.0)
+                z_axis_full = sig_stage.z_axis_px + roi_y
+                poi_z_full = (
+                    [p + roi_y for p in sig_stage.poi_z_px]
+                    if sig_stage.poi_z_px else None
+                )
+                chart_arr = _signal_pixmap_arr(
+                    sig_stage.signal, z_axis_full, poi_z_full,
+                    w=self._chart_w, h=display_h,
+                    line_thickness=2, log_scale=False,
+                    show_poi=show_poi,
+                    extra_signals=sig_stage.extra_signals,
+                    z_range_override=z_range,
+                )
+                panel = _ChartPanel(idx, desc)
+                panel.set_expanded_width(self._chart_w)
+                panel.move_requested.connect(self._on_move_panel)
+                panel.hovered.connect(lambda v, _idx=idx: self._on_chart_hovered(_idx, v))
+                self._panels_layout.insertWidget(
+                    self._panels_layout.count() - 1, panel
+                )
+                panel.view.set_pixmap(_ndarray_to_pixmap(chart_arr))
+                self._chart_panels.append(panel)
+                self._all_views.append(panel.view)
+                panel.view.row_hovered.connect(self._on_row_hovered)
+                panel.annotation_requested.connect(self._on_chart_annotation_requested)
+                _zmin, _zmax = z_range
+                panel.view.coord_formatter = (
+                    lambda rf, cf, zm=_zmin, zs=_zmax - _zmin:
+                        f"z: {zm + rf * zs:.1f} px"
+                )
+
+                self._cached_signal_data[idx] = {
+                    "signal": sig_stage.signal,
+                    "z_axis": z_axis_full,
+                    "poi_z":  poi_z_full,
+                    "extra_signals": sig_stage.extra_signals,
+                }
+                self._panel_list_row[idx] = -1
+
+            # Shared caches
+            self._cached_src_bgr = src_bgr
+            self._cached_ctr_bgr = ctr_bgr
+            self._cached_strip   = None   # unused in all-tips mode
+            self._cached_strip_display_w = (
+                next(iter(self._cached_strips.values()))["strip_w"]
+                if self._cached_strips else _IMG_W
             )
 
-            chart_arr = _signal_pixmap_arr(
-                sig_stage.signal,
-                z_axis_full,
-                poi_z_full,
-                w=self._chart_w,
-                h=display_h,
-                line_thickness=2,
-                log_scale=False,
-                show_poi=show_poi,
-                extra_signals=sig_stage.extra_signals,
-                z_range_override=z_range,
-            )
-            pm = _ndarray_to_pixmap(chart_arr)
+        else:
+            # ── NORMAL MODE: single shared strip then all chart panels ──────
 
-            panel = _ChartPanel(idx, desc)
-            panel.set_expanded_width(self._chart_w)
-            # No setFixedHeight — height fills the scroll area viewport
-            panel.move_requested.connect(self._on_move_panel)
-            panel.hovered.connect(lambda v, _idx=idx: self._on_chart_hovered(_idx, v))
+            strip_pm:   Optional[QPixmap] = None
+            strip_ctr_pm: Optional[QPixmap] = None
+            if src_bgr is not None:
+                strip_pm = self._make_strip_pixmap(
+                    src_bgr, global_z_min, global_z_max,
+                    display_h, strip_display_w, _bbox_src)
+            if ctr_bgr is not None:
+                strip_ctr_pm = self._make_strip_pixmap(
+                    ctr_bgr, global_z_min, global_z_max,
+                    display_h, strip_display_w, _bbox_src)
+
+            strip = _StripPanel()
+            strip.setFixedWidth(strip_display_w)
+            strip.set_aspect_ratio(strip_display_w / max(1, display_h))
+            strip.setVisible(show_images)
+            self._panels_layout.insertWidget(
+                self._panels_layout.count() - 1, strip
+            )
+            strip.set_images(strip_pm, strip_ctr_pm)
+            self._all_views.append(strip.view)
+            strip.view.row_hovered.connect(self._on_row_hovered)
+            self._strip_panels.append(strip)
+            _zmin, _zmax = z_range
+            strip.view.coord_formatter = (
+                lambda rf, cf, zm=_zmin, zs=_zmax - _zmin:
+                    f"z: {zm + rf * zs:.1f} px"
+            )
+            self._cached_strip = strip
+            self._cached_src_bgr = src_bgr
+            self._cached_ctr_bgr = ctr_bgr
+            self._cached_strip_display_w = strip_display_w
+
+            for idx in sorted(self._results.keys()):
+                res = self._results[idx]
+                sig_stage = signal_stages.get(idx)
+                if sig_stage is None:
+                    continue
+
+                entry = res["entry"]
+                desc  = entry.get("description", f"Preset {idx + 1}")
+
+                roi_y = roi_y_offsets.get(idx, 0.0)
+                z_axis_full = sig_stage.z_axis_px + roi_y
+                poi_z_full = (
+                    [p + roi_y for p in sig_stage.poi_z_px]
+                    if sig_stage.poi_z_px else None
+                )
+
+                chart_arr = _signal_pixmap_arr(
+                    sig_stage.signal, z_axis_full, poi_z_full,
+                    w=self._chart_w, h=display_h,
+                    line_thickness=2, log_scale=False,
+                    show_poi=show_poi,
+                    extra_signals=sig_stage.extra_signals,
+                    z_range_override=z_range,
+                )
+                panel = _ChartPanel(idx, desc)
+                panel.set_expanded_width(self._chart_w)
+                panel.move_requested.connect(self._on_move_panel)
+                panel.hovered.connect(lambda v, _idx=idx: self._on_chart_hovered(_idx, v))
+                self._panels_layout.insertWidget(
+                    self._panels_layout.count() - 1, panel
+                )
+                panel.view.set_pixmap(_ndarray_to_pixmap(chart_arr))
+                self._chart_panels.append(panel)
+                self._all_views.append(panel.view)
+                panel.view.row_hovered.connect(self._on_row_hovered)
+                panel.annotation_requested.connect(self._on_chart_annotation_requested)
+                _zmin, _zmax = z_range
+                panel.view.coord_formatter = (
+                    lambda rf, cf, zm=_zmin, zs=_zmax - _zmin:
+                        f"z: {zm + rf * zs:.1f} px"
+                )
+
+                self._cached_signal_data[idx] = {
+                    "signal": sig_stage.signal,
+                    "z_axis": z_axis_full,
+                    "poi_z":  poi_z_full,
+                    "extra_signals": sig_stage.extra_signals,
+                }
+                self._panel_list_row[idx] = -1
+                for _row in range(self._preset_list.count()):
+                    _item = self._preset_list.item(_row)
+                    if _item.data(Qt.ItemDataRole.UserRole) == entry:
+                        self._panel_list_row[idx] = _row
+                        break
+
+        # ── 4b. Placeholder combined panel (only in normal preset-compare mode) ──
+        if not self._all_tips_mode:
+            combined_panel = _ChartPanel(-1, "\u2211 Combined")
+            combined_panel.set_expanded_width(self._chart_w)
+            combined_panel._btn_left.setVisible(False)
+            combined_panel._btn_right.setVisible(False)
+            combined_panel.view.annotation_mode = False
             self._panels_layout.insertWidget(
                 self._panels_layout.count() - 1,
-                panel,
+                combined_panel,
             )
-            panel.view.set_pixmap(pm)
-            self._chart_panels.append(panel)
-            self._all_views.append(panel.view)
-            panel.view.row_hovered.connect(self._on_row_hovered)
-            panel.annotation_requested.connect(self._on_chart_annotation_requested)
-
-            # Cache pre-offset signal data so re-renders (toggle/resize) stay aligned
-            self._cached_signal_data[idx] = {
-                "signal": sig_stage.signal,
-                "z_axis": z_axis_full,
-                "poi_z":  poi_z_full,
-                "extra_signals": sig_stage.extra_signals,
-            }
-            # Map panel → list row for hover highlight
-            self._panel_list_row[idx] = -1
-            for _row in range(self._preset_list.count()):
-                _item = self._preset_list.item(_row)
-                if _item.data(Qt.ItemDataRole.UserRole) == entry:
-                    self._panel_list_row[idx] = _row
-                    break
-
-        # Set minimum width on the container so the horizontal scrollbar
-        # appears correctly.  Height is unconstrained — setWidgetResizable(True)
-        # on the scroll area fills the viewport height automatically.
-
-        # ── 4b. Placeholder combined panel (filled after _recompute_interpretations) ──
-        combined_panel = _ChartPanel(-1, "∑ Combined")
-        combined_panel.set_expanded_width(self._chart_w)
-        combined_panel._btn_left.setVisible(False)
-        combined_panel._btn_right.setVisible(False)
-        combined_panel.view.annotation_mode = False
-        self._panels_layout.insertWidget(
-            self._panels_layout.count() - 1,
-            combined_panel,
-        )
-        self._combined_panel = combined_panel
-        self._chart_panels.append(combined_panel)
-        self._all_views.append(combined_panel.view)
-        combined_panel.view.row_hovered.connect(self._on_row_hovered)
+            self._combined_panel = combined_panel
+            self._chart_panels.append(combined_panel)
+            self._all_views.append(combined_panel.view)
+            combined_panel.view.row_hovered.connect(self._on_row_hovered)
 
         margins = self._panels_layout.contentsMargins()
         sp = self._panels_layout.spacing()
-        n = len(self._chart_panels)
+        n_charts = len(self._chart_panels)
+        n_strips  = len(self._strip_panels)
+        show_images = self._images_btn.isChecked()
+        if show_images:
+            strip_total_w = (
+                sum(sd["strip_w"] for sd in self._cached_strips.values())
+                if self._all_tips_mode
+                else self._cached_strip_display_w
+            )
+        else:
+            strip_total_w = 0
         content_w = (
             margins.left() + margins.right()
-            + strip_display_w
-            + sp
-            + n * self._chart_w
-            + max(0, n - 1) * sp
+            + strip_total_w
+            + (sp * n_strips if show_images else 0)
+            + n_charts * self._chart_w
+            + max(0, n_charts - 1) * sp
         )
         self._panels_container.setMinimumWidth(content_w)
         self._cached_src_bgr        = src_bgr
         self._cached_ctr_bgr        = ctr_bgr
         self._cached_z_range        = z_range          # full display range
-        self._cached_interp_z_range = interp_z_range   # narrowed to valid rows
+        self._cached_interp_z_range = interp_z_range   # narrowed to valid rows (normal mode)
+        self._cached_per_tip_interp_z_ranges = per_tip_interp_z_ranges if self._all_tips_mode else None
         self._cached_bbox           = _bbox_src
-        self._cached_strip_display_w = strip_display_w
-        self._cached_strip          = strip
-        # _cached_signal_data is populated per-preset in step 4 above
-        # Collect roi1_points from any stage that has them
+        # _cached_strip / _cached_src_bgr etc set in the branch above
+        # _cached_signal_data is populated per-preset in step 3 above
+        # Collect roi1_points from any stage that has them (normal mode fallback)
         self._cached_roi1_points = None
         for res in self._results.values():
             for s in res["stages"]:
@@ -1627,15 +2040,21 @@ class ModeCompareDialog(QDialog):
         that has behavior_rules.  Stores results in ``_cached_interp_results``."""
         from pa.pipeline.interpreters.signal_interpreter import interpret_signals
 
-        # Use the narrowed interp z_range (excludes masked edge rows) so that
-        # artificially-zeroed rows don't contaminate the interpretation.
-        interp_z_range = self._cached_interp_z_range or self._cached_z_range
-        if interp_z_range is None:
+        # In All Tips mode each tip has its own valid z window; in normal mode
+        # a single shared interp_z_range (intersection of all presets) is used.
+        per_tip_ranges = self._cached_per_tip_interp_z_ranges  # None in normal mode
+        shared_z_range = self._cached_interp_z_range or self._cached_z_range
+
+        if per_tip_ranges is None and shared_z_range is None:
             self._cached_interp_results = {}
             return
 
-        z_min, z_max = interp_z_range
-        global_z_axis = np.arange(int(z_min), int(z_max) + 1, dtype=np.float32)
+        # Shared global_z_axis for normal mode only
+        if per_tip_ranges is None:
+            z_min, z_max = shared_z_range
+            shared_global_z_axis = np.arange(int(z_min), int(z_max) + 1, dtype=np.float32)
+        else:
+            shared_global_z_axis = None
 
         results: Dict[int, Any] = {}
         for idx, sig_data in self._cached_signal_data.items():
@@ -1644,6 +2063,16 @@ class ModeCompareDialog(QDialog):
             rules = list(entry.get("behavior_rules") or [])
             if not rules:
                 continue
+
+            # Determine the z axis for this entry
+            if per_tip_ranges is not None:
+                tip_range = per_tip_ranges.get(idx)
+                if tip_range is None:
+                    continue
+                t_min, t_max = tip_range
+                global_z_axis = np.arange(int(t_min), int(t_max) + 1, dtype=np.float32)
+            else:
+                global_z_axis = shared_global_z_axis
 
             z_axis  = sig_data["z_axis"]
             signals = [(sig_data["signal"], z_axis)]
@@ -1670,8 +2099,10 @@ class ModeCompareDialog(QDialog):
 
         self._cached_interp_results = results
 
-        # ── Combined cross-preset density ──────────────────────────────────
-        if results:
+        # ── Combined cross-preset density (normal mode only) ───────────────
+        # In All Tips mode each tip has its own z axis, so stacking densities
+        # across tips is not meaningful; the combined panel is hidden anyway.
+        if results and not self._all_tips_mode:
             from pa.pipeline.interpreters.signal_interpreter import _kde_peak
             first = next(iter(results.values()))
             gza   = first.z_axis
@@ -1689,16 +2120,19 @@ class ModeCompareDialog(QDialog):
         else:
             self._cached_combined_interp = None
 
-    def _draw_interp_on_strip(self, pm: QPixmap) -> QPixmap:
-        """Draw solid boundary lines from all presets' interpretations onto *pm*.
+    def _draw_interp_on_strip(
+        self, pm: QPixmap, tip_idx: Optional[int] = None
+    ) -> QPixmap:
+        """Draw solid boundary lines from interpretation results onto *pm*.
 
         Green  = tip_bottom estimates
         Orange = meniscus estimates
-        Lines are drawn from all presets that have a valid estimate.
+        When *tip_idx* is given (All Tips mode) only that tip's own result is
+        drawn; combined lines are also suppressed in that case.
         """
         show_tb   = self._calc_tb_chk.isChecked()
         show_mn   = self._calc_mn_chk.isChecked()
-        show_comb = self._calc_combined_chk.isChecked()
+        show_comb = self._calc_combined_chk.isChecked() and tip_idx is None
         if not (show_tb or show_mn or show_comb):
             return pm
         if not self._cached_interp_results and not self._cached_combined_interp:
@@ -1712,9 +2146,16 @@ class ModeCompareDialog(QDialog):
         h = pm.height()
         w = pm.width()
 
-        tb_zs = ([r.tip_bottom_z for r in self._cached_interp_results.values()
+        # Filter to one tip when tip_idx is specified
+        if tip_idx is not None:
+            single = self._cached_interp_results.get(tip_idx)
+            interp_iter = [single] if single is not None else []
+        else:
+            interp_iter = list(self._cached_interp_results.values())
+
+        tb_zs = ([r.tip_bottom_z for r in interp_iter
                   if r.tip_bottom_z is not None] if show_tb else [])
-        mn_zs = ([r.meniscus_z   for r in self._cached_interp_results.values()
+        mn_zs = ([r.meniscus_z   for r in interp_iter
                   if r.meniscus_z is not None]  if show_mn else [])
 
         comb_tb_z = (self._cached_combined_interp or {}).get("tip_bottom_z") if show_comb else None
@@ -1789,7 +2230,7 @@ class ModeCompareDialog(QDialog):
         z_span = max(1.0, z_max - z_min)
         h = pm.height()
         w = pm.width()
-        BAND_W = 8
+        BAND_W = self._band_w_spin.value()
 
         gza = interp.z_axis
         seq = interp.state_sequence
@@ -1807,11 +2248,14 @@ class ModeCompareDialog(QDialog):
         painter = QPainter(result)
 
         # ── Layer 1: state band ───────────────────────────────────────────
-        # BGR palette shared by hard and soft modes
+        # BGR palette: vivid, clearly distinct colours at full opacity.
+        # gas_in_tip    = cyan-teal   (cool — gas/air is "cold")
+        # liquid_in_tip = bright green
+        # below_tip     = red-orange  (warm — tip bottom / shank region)
         _STATE_BGR_F = np.array([
-            [140, 140, 140],   # STATE_GAS
-            [200,  80,  40],   # STATE_LIQ
-            [ 30,  40,  80],   # STATE_BELOW
+            [ 40, 200, 200],   # STATE_GAS   — cyan-teal
+            [ 20, 200,  20],   # STATE_LIQ   — bright green
+            [ 30,  60, 220],   # STATE_BELOW — red-orange (BGR: B=30,G=60,R=220)
         ], dtype=np.float32)
 
         if show_band:
@@ -1928,7 +2372,7 @@ class ModeCompareDialog(QDialog):
 
         z_min, z_max = z_range
         z_span = max(1.0, z_max - z_min)
-        BAND_W   = 8
+        BAND_W   = self._band_w_spin.value()
         BAR_AREA = max(6, w - BAND_W)
 
         gza   = comb["z_axis"].astype(np.float32)

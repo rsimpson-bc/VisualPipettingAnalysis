@@ -58,6 +58,7 @@ from pa.pipeline.interpreters.signal_interpreter import (
     _trigger_peak,
     _trigger_high_signal,
     _trigger_low_signal,
+    _trigger_rising_edge,
     _apply_location_prior,
     _apply_rule,
     viterbi_decode,
@@ -268,6 +269,99 @@ class TestTriggerPeak:
         act_w0   = _trigger_peak(signal, rule_window0)
         np.testing.assert_array_almost_equal(act_base, act_w0)
 
+    # ── high_above tests ──────────────────────────────────────────────
+
+    def test_high_above_gates_peaks_without_high_signal_above(self):
+        # Peak A at row 20: nothing high above it (rows 0:20 are zero).
+        # Peak B at row 60: high-signal zone in rows 40:55, brief dip 55:59,
+        #   then peak.  With high_above gate, peak B wins even though A is larger.
+        n = 100
+        signal = np.zeros(n, dtype=np.float32)
+        signal[20]    = 1.0    # large peak A — no high signal above
+        signal[21:40] = 0.0    # quiescent between peaks
+        signal[40:55] = 0.9    # high zone above peak B
+        signal[55:59] = 0.05   # brief dip → makes row 60 a local max
+        signal[60]    = 0.8    # smaller peak B — high signal above in window
+        # rows 61+ stay 0
+        rule_no  = {"smoothing_px": 1, "min_prominence_frac": 0.1, "spread_px": 0.0}
+        rule_yes = {**rule_no, "high_above_window_px": 15,
+                    "high_above_threshold_frac": 0.7, "high_above_min_strength": 0.0}
+        act_no  = _trigger_peak(signal, rule_no)
+        act_yes = _trigger_peak(signal, rule_yes)
+        assert act_no[20]  > act_no[60],  "without gate larger peak wins"
+        assert act_yes[60] > act_yes[20], "with gate peak below high zone wins"
+
+    def test_high_above_min_strength_one_disables_gate(self):
+        n = 100
+        signal = np.zeros(n, dtype=np.float32)
+        signal[20]    = 1.0
+        signal[40:55] = 0.9
+        signal[55:59] = 0.05
+        signal[60]    = 0.8
+        rule_no   = {"smoothing_px": 1, "min_prominence_frac": 0.1, "spread_px": 0.0}
+        rule_soft = {**rule_no, "high_above_window_px": 15,
+                     "high_above_threshold_frac": 0.7, "high_above_min_strength": 1.0}
+        act_no   = _trigger_peak(signal, rule_no)
+        act_soft = _trigger_peak(signal, rule_soft)
+        np.testing.assert_array_almost_equal(act_no, act_soft)
+
+    def test_high_above_disabled_by_default(self):
+        n = 80
+        signal = np.random.default_rng(42).random(n).astype(np.float32) * 0.05
+        signal[40] = 1.0
+        rule_base    = {"smoothing_px": 1, "min_prominence_frac": 0.3, "spread_px": 0.0}
+        rule_window0 = {**rule_base, "high_above_window_px": 0}
+        act_base = _trigger_peak(signal, rule_base)
+        act_w0   = _trigger_peak(signal, rule_window0)
+        np.testing.assert_array_almost_equal(act_base, act_w0)
+
+    # ── high_below tests ──────────────────────────────────────────────
+
+    def test_high_below_gates_peaks_without_high_signal_below(self):
+        # Peak A at row 20: nothing high below it (rows 21:60 are near-zero).
+        # Peak B at row 60: brief dip 61:64, then high zone 64:80.
+        # With high_below gate, peak B wins even though A is larger.
+        n = 100
+        signal = np.zeros(n, dtype=np.float32)
+        signal[20]    = 1.0    # large peak A — no high signal below
+        signal[21:58] = 0.0
+        signal[58:60] = 0.05   # brief rise → makes row 60 a local max
+        signal[60]    = 0.8    # smaller peak B
+        signal[61:64] = 0.05   # brief dip after peak B
+        signal[64:80] = 0.9    # high zone below peak B
+        rule_no  = {"smoothing_px": 1, "min_prominence_frac": 0.1, "spread_px": 0.0}
+        rule_yes = {**rule_no, "high_below_window_px": 15,
+                    "high_below_threshold_frac": 0.7, "high_below_min_strength": 0.0}
+        act_no  = _trigger_peak(signal, rule_no)
+        act_yes = _trigger_peak(signal, rule_yes)
+        assert act_no[20]  > act_no[60],  "without gate larger peak wins"
+        assert act_yes[60] > act_yes[20], "with gate peak above high zone wins"
+
+    def test_high_below_min_strength_one_disables_gate(self):
+        n = 100
+        signal = np.zeros(n, dtype=np.float32)
+        signal[20]    = 1.0
+        signal[58:60] = 0.05
+        signal[60]    = 0.8
+        signal[61:64] = 0.05
+        signal[64:80] = 0.9
+        rule_no   = {"smoothing_px": 1, "min_prominence_frac": 0.1, "spread_px": 0.0}
+        rule_soft = {**rule_no, "high_below_window_px": 15,
+                     "high_below_threshold_frac": 0.7, "high_below_min_strength": 1.0}
+        act_no   = _trigger_peak(signal, rule_no)
+        act_soft = _trigger_peak(signal, rule_soft)
+        np.testing.assert_array_almost_equal(act_no, act_soft)
+
+    def test_high_below_disabled_by_default(self):
+        n = 80
+        signal = np.random.default_rng(7).random(n).astype(np.float32) * 0.05
+        signal[40] = 1.0
+        rule_base    = {"smoothing_px": 1, "min_prominence_frac": 0.3, "spread_px": 0.0}
+        rule_window0 = {**rule_base, "high_below_window_px": 0}
+        act_base = _trigger_peak(signal, rule_base)
+        act_w0   = _trigger_peak(signal, rule_window0)
+        np.testing.assert_array_almost_equal(act_base, act_w0)
+
 
 class TestTriggerHighSignal:
     def test_masks_below_threshold(self):
@@ -304,6 +398,94 @@ class TestTriggerLowSignal:
         act = _trigger_low_signal(signal, {"threshold_frac": 0.3, "spread_px": 0.0})
         # All values are "low" → returns ones (clipped by normalisation)
         assert act.sum() > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Rising-edge trigger tests
+# ---------------------------------------------------------------------------
+
+class TestTriggerRisingEdge:
+    def _step_signal(self, n=80, step_at=30, low=0.0, high=1.0) -> np.ndarray:
+        """Step signal: low before step_at, high from step_at onward."""
+        s = np.full(n, low, dtype=np.float32)
+        s[step_at:] = high
+        return s
+
+    def _spike_signal(self, n=80, onset=30, peak=38, low=0.0, high=1.0) -> np.ndarray:
+        """Signal that rises at onset, peaks at peak, then returns to low."""
+        s = np.full(n, low, dtype=np.float32)
+        for i in range(onset, peak + 1):
+            s[i] = high * (i - onset) / max(1, peak - onset)
+        for i in range(peak + 1, min(n, peak + 8)):
+            s[i] = high * max(0.0, 1.0 - (i - peak) / 8.0)
+        return s
+
+    def test_fires_at_crossing_row(self):
+        """Activation peak should be near the step-crossing row."""
+        step_at = 30
+        signal = self._step_signal(n=80, step_at=step_at)
+        rule = {"smoothing_px": 1, "threshold_frac": 0.3, "spread_px": 0.0}
+        act = _trigger_rising_edge(signal, rule)
+        assert act.sum() > 0.0
+        # The peak of activation must be within a few rows of the crossing
+        assert abs(int(np.argmax(act)) - step_at) <= 2
+
+    def test_flat_signal_returns_zeros(self):
+        signal = np.ones(40, dtype=np.float32)
+        act = _trigger_rising_edge(signal, {"threshold_frac": 0.3, "spread_px": 0.0})
+        np.testing.assert_array_equal(act, 0.0)
+
+    def test_constant_low_signal_returns_zeros(self):
+        """Signal always below threshold — no crossing — all zeros."""
+        signal = np.full(40, 0.1, dtype=np.float32)
+        act = _trigger_rising_edge(signal, {"threshold_frac": 0.3, "spread_px": 0.0})
+        np.testing.assert_array_equal(act, 0.0)
+
+    def test_spike_fires_at_onset_not_peak(self):
+        """With a spike signal the rising-edge fires near onset, not peak."""
+        onset, peak = 30, 40
+        signal = self._spike_signal(n=80, onset=onset, peak=peak)
+        rule = {"smoothing_px": 1, "threshold_frac": 0.2, "spread_px": 0.0}
+        act = _trigger_rising_edge(signal, rule)
+        assert act.sum() > 0.0
+        edge_row = int(np.argmax(act))
+        # Rising edge must be closer to onset than to peak
+        assert abs(edge_row - onset) < abs(edge_row - peak)
+
+    def test_pre_low_window_gates_crossing_without_low_prefix(self):
+        """A crossing that starts from a high region (not low) is suppressed."""
+        n = 80
+        # Signal is high everywhere then dips and rises again
+        signal = np.full(n, 1.0, dtype=np.float32)
+        signal[30:40] = 0.0   # brief dip
+        # Rising-edge at row 40: immediately before it are mostly HIGH rows
+        # but within the dip window they are low
+        rule = {
+            "smoothing_px": 1,
+            "threshold_frac": 0.3,
+            "spread_px": 0.0,
+            "pre_low_window_px": 20,   # look at 20 rows before crossing
+            "pre_low_frac": 0.8,       # require 80 % to be low — won't pass
+        }
+        act = _trigger_rising_edge(signal, rule)
+        # The crossing at ~40 should be suppressed because most of the
+        # pre-window rows are high
+        np.testing.assert_array_equal(act, 0.0)
+
+    def test_pre_low_window_passes_genuine_low_to_high(self):
+        """A step from a truly-low region passes the pre-low gate."""
+        step_at = 50
+        signal = self._step_signal(n=80, step_at=step_at)
+        rule = {
+            "smoothing_px": 1,
+            "threshold_frac": 0.3,
+            "spread_px": 0.0,
+            "pre_low_window_px": 20,
+            "pre_low_frac": 0.8,
+        }
+        act = _trigger_rising_edge(signal, rule)
+        assert act.sum() > 0.0
+        assert abs(int(np.argmax(act)) - step_at) <= 2
 
 
 # ---------------------------------------------------------------------------

@@ -133,6 +133,24 @@ def delete_preset(preset_id: str, path: Optional[str] = None) -> bool:
     return True
 
 
+def rename_preset(
+    preset_id: str,
+    new_description: str,
+    path: Optional[str] = None,
+) -> bool:
+    """Update the ``description`` field of a preset identified by *preset_id*.
+
+    Saves the file and returns True on success, False if the id was not found.
+    """
+    data = load_presets(path)
+    for entry in data.get("presets", []):
+        if entry.get("id") == preset_id:
+            entry["description"] = new_description.strip()
+            save_presets(data, path)
+            return True
+    return False
+
+
 def update_behavior_rules(
     preset_id: str,
     rules: List[Dict[str, Any]],

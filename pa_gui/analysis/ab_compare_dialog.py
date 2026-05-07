@@ -92,6 +92,21 @@ class _ZoomableView(QGraphicsView):
         self._user_zoomed = False
         # When True, right-click emits row_right_clicked instead of the copy menu
         self.annotation_mode: bool = False
+        # Coordinate overlay — shown while hovering, auto-hides after 3 s
+        self.coord_formatter = None  # Optional callable(row_frac, col_frac) -> str
+        self._coord_overlay = QLabel("", self.viewport())
+        self._coord_overlay.setStyleSheet(
+            "QLabel { background: rgba(0,0,0,180); color: #e0e0e0; "
+            "padding: 2px 5px; border-radius: 3px; font-size: 10px; }"
+        )
+        self._coord_overlay.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        self._coord_overlay.setVisible(False)
+        self._coord_timer = QTimer(self)
+        self._coord_timer.setSingleShot(True)
+        self._coord_timer.setInterval(3000)
+        self._coord_timer.timeout.connect(self._coord_overlay.hide)
         self._show_placeholder()
 
     def _show_placeholder(self):
@@ -192,12 +207,32 @@ class _ZoomableView(QGraphicsView):
             self.set_crosshair_frac(frac)
             self.set_col_crosshair_frac(col_frac)
             self.row_hovered.emit(frac)
+            # Coordinate overlay
+            if self.coord_formatter is not None:
+                text = self.coord_formatter(frac, col_frac)
+            else:
+                sc_x = sr.left() + col_frac * sr.width()
+                sc_y = sr.top() + frac * sr.height()
+                text = f"x: {sc_x:.0f}  y: {sc_y:.0f}"
+            if text:
+                self._coord_overlay.setText(text)
+                self._coord_overlay.adjustSize()
+                vp = self.viewport()
+                vx = event.pos().x() + 14
+                vy = event.pos().y() - self._coord_overlay.height() - 6
+                vx = min(vx, vp.width() - self._coord_overlay.width() - 2)
+                vy = max(vy, 2)
+                self._coord_overlay.move(vx, vy)
+                self._coord_overlay.setVisible(True)
+                self._coord_timer.start()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         self.set_crosshair_frac(-1.0)
         self.set_col_crosshair_frac(-1.0)
         self.row_hovered.emit(-1.0)
+        self._coord_overlay.hide()
+        self._coord_timer.stop()
         super().leaveEvent(event)
 
     def contextMenuEvent(self, event):
@@ -1044,6 +1079,12 @@ class ABCompareDialog(QDialog):
         self._load_preset_btn.clicked.connect(self._on_load_preset)
         load_delete_row.addWidget(self._load_preset_btn, 1)
 
+        self._rename_preset_btn = QPushButton("Rename…")
+        self._rename_preset_btn.setEnabled(False)
+        self._rename_preset_btn.setToolTip("Rename the selected preset.")
+        self._rename_preset_btn.clicked.connect(self._on_rename_preset)
+        load_delete_row.addWidget(self._rename_preset_btn)
+
         self._delete_preset_btn = QPushButton("Delete")
         self._delete_preset_btn.setEnabled(False)
         self._delete_preset_btn.setToolTip("Permanently delete the selected preset.")
@@ -1425,10 +1466,12 @@ class ABCompareDialog(QDialog):
         if entry is None:
             self._preset_preview.clear()
             self._load_preset_btn.setEnabled(False)
+            self._rename_preset_btn.setEnabled(False)
             self._delete_preset_btn.setEnabled(False)
         else:
             self._preset_preview.setPlainText(ab_presets.format_preview(entry))
             self._load_preset_btn.setEnabled(True)
+            self._rename_preset_btn.setEnabled(True)
             self._delete_preset_btn.setEnabled(True)
 
     def _on_load_preset(self) -> None:
@@ -1470,6 +1513,39 @@ class ABCompareDialog(QDialog):
         # Select the newly saved entry (index 1 = first real entry after placeholder)
         if self._preset_combo.count() > 1:
             self._preset_combo.setCurrentIndex(1)
+
+    def _on_rename_preset(self) -> None:
+        """Prompt for a new description and update the selected preset on disk."""
+        idx = self._preset_combo.currentIndex()
+        entry = self._preset_combo.itemData(idx)
+        if entry is None:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        current = entry.get("description", "")
+        new_desc, ok = QInputDialog.getText(
+            self,
+            "Rename preset",
+            "New description:",
+            text=current,
+        )
+        if not ok:
+            return
+        new_desc = new_desc.strip()
+        if new_desc == current.strip():
+            return
+        try:
+            ab_presets.rename_preset(entry["id"], new_desc)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Rename failed", str(exc))
+            return
+        self._refresh_preset_combo()
+        # Restore selection to the same item by matching id
+        for i in range(self._preset_combo.count()):
+            e = self._preset_combo.itemData(i)
+            if e is not None and e.get("id") == entry.get("id"):
+                self._preset_combo.setCurrentIndex(i)
+                break
 
     def _on_delete_preset(self) -> None:
         """Delete the currently selected preset after confirmation."""

@@ -63,6 +63,12 @@ _TRIGGER_PARAMS: Dict[str, List[Tuple[str, float, float, bool]]] = {
         ("low_below_window_px",      0.0,  200.0, True),
         ("low_below_threshold_frac", 0.01, 0.99,  False),
         ("low_below_min_strength",   0.0,  1.0,   False),
+        ("high_above_window_px",     0.0,  200.0, True),
+        ("high_above_threshold_frac",0.01, 0.99,  False),
+        ("high_above_min_strength",  0.0,  1.0,   False),
+        ("high_below_window_px",     0.0,  200.0, True),
+        ("high_below_threshold_frac",0.01, 0.99,  False),
+        ("high_below_min_strength",  0.0,  1.0,   False),
     ],
     # Note: peak_side is a categorical string — not optimizable.
     "high_signal": [
@@ -72,6 +78,12 @@ _TRIGGER_PARAMS: Dict[str, List[Tuple[str, float, float, bool]]] = {
     "low_signal": [
         ("threshold_frac", 0.01, 0.95, False),
         ("smoothing_px",   1.0,  30.0, True),
+    ],
+    "rising_edge": [
+        ("threshold_frac",   0.01, 0.95,  False),
+        ("smoothing_px",     1.0,  30.0,  True),
+        ("pre_low_window_px",0.0,  200.0, True),
+        ("pre_low_frac",     0.0,  1.0,   False),
     ],
 }
 
@@ -88,9 +100,17 @@ _DEFAULTS: Dict[str, float] = {
     "low_above_window_px":      0,
     "low_above_threshold_frac": 0.3,
     "low_above_min_strength":   0.0,
-    "low_below_window_px":      0,
-    "low_below_threshold_frac": 0.3,
-    "low_below_min_strength":   0.0,
+    "low_below_window_px":       0,
+    "low_below_threshold_frac":  0.3,
+    "low_below_min_strength":    0.0,
+    "high_above_window_px":      0,
+    "high_above_threshold_frac": 0.7,
+    "high_above_min_strength":   1.0,
+    "high_below_window_px":      0,
+    "high_below_threshold_frac": 0.7,
+    "high_below_min_strength":   1.0,
+    "pre_low_window_px":         0,
+    "pre_low_frac":              0.5,
 }
 
 # Penalty added to the loss when a required boundary has no prediction.

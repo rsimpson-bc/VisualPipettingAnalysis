@@ -51,6 +51,7 @@ class ModeCompareWorker(_ABWorkerBase):
         pipette_index: int = 0,
         instrument_config_path: str = "",
         tip_type: str = "",
+        per_entry_pipette: Optional[List[int]] = None,
         parent=None,
     ) -> None:
         # _ABWorkerBase expects params_a and params_b; supply dummies —
@@ -66,8 +67,9 @@ class ModeCompareWorker(_ABWorkerBase):
             tip_type=tip_type,
             parent=parent,
         )
-        self._preset_entries = list(preset_entries)
-        self._pipette_index  = pipette_index
+        self._preset_entries    = list(preset_entries)
+        self._pipette_index     = pipette_index
+        self._per_entry_pipette = list(per_entry_pipette) if per_entry_pipette is not None else None
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -82,38 +84,70 @@ class ModeCompareWorker(_ABWorkerBase):
                 return
             frames, reference_frames, source_image = loaded
 
-            # Resolve ROI once — shared across all presets
-            roi_bbox   = None
-            roi_points = None
+            # Load instrument config once (used for per-entry ROI resolution).
+            ic = None
             if self._instrument_config_path and os.path.isfile(self._instrument_config_path):
                 try:
                     with open(self._instrument_config_path, encoding="utf-8") as f:
                         ic = json.load(f)
-                    roi_bbox, roi_points = self._resolve_roi(ic, self._pipette_index)
                 except Exception as exc:
-                    self.progress.emit(f"ROI warning: {exc}")
+                    self.progress.emit(f"Config warning: {exc}")
             else:
                 self.progress.emit("ROI: no instrument config — using full image")
 
-            image_set = ImageSet(
-                pipette_index=self._pipette_index,
-                frames=frames,
-                source_paths=list(self._image_paths),
-                roi=roi_bbox,
-                roi_points=roi_points,
-                reference_frames=reference_frames,
-                reference_source_paths=list(self._reference_paths),
-            )
+            def _resolve_for(pip_idx: int):
+                if ic is None:
+                    return None, None
+                try:
+                    return self._resolve_roi(ic, pip_idx)
+                except Exception as exc:
+                    self.progress.emit(f"ROI warning (tip {pip_idx + 1}): {exc}")
+                    return None, None
+
+            # When per_entry_pipette is None: resolve ROI once for the common
+            # pipette and reuse the same ImageSet for every preset.
+            # When per_entry_pipette is set: resolve ROI per entry so each tip
+            # gets the correct ROI crop.
+            common_image_set = None
+            common_roi_bbox  = None
+            if self._per_entry_pipette is None:
+                common_roi_bbox, common_roi_points = _resolve_for(self._pipette_index)
+                common_image_set = ImageSet(
+                    pipette_index=self._pipette_index,
+                    frames=frames,
+                    source_paths=list(self._image_paths),
+                    roi=common_roi_bbox,
+                    roi_points=common_roi_points,
+                    reference_frames=reference_frames,
+                    reference_source_paths=list(self._reference_paths),
+                )
 
             for idx, entry in enumerate(self._preset_entries):
                 if self.isInterruptionRequested():
                     break
-                desc = entry.get("description", f"Preset {idx + 1}")
-                self.progress.emit(
-                    f"Running preset {idx + 1}/{len(self._preset_entries)}: "
-                    f"{desc[:40]}…" if len(desc) > 40 else
-                    f"Running preset {idx + 1}/{len(self._preset_entries)}: {desc}"
-                )
+
+                if self._per_entry_pipette is not None:
+                    pip_idx  = self._per_entry_pipette[idx]
+                    roi_bbox, roi_points = _resolve_for(pip_idx)
+                    image_set = ImageSet(
+                        pipette_index=pip_idx,
+                        frames=frames,
+                        source_paths=list(self._image_paths),
+                        roi=roi_bbox,
+                        roi_points=roi_points,
+                        reference_frames=reference_frames,
+                        reference_source_paths=list(self._reference_paths),
+                    )
+                    self.progress.emit(f"Running tip {pip_idx + 1}/8…")
+                else:
+                    image_set = common_image_set
+                    roi_bbox  = common_roi_bbox
+                    desc = entry.get("description", f"Preset {idx + 1}")
+                    self.progress.emit(
+                        f"Running preset {idx + 1}/{len(self._preset_entries)}: "
+                        f"{desc[:40]}…" if len(desc) > 40 else
+                        f"Running preset {idx + 1}/{len(self._preset_entries)}: {desc}"
+                    )
 
                 params = copy.deepcopy(entry.get("params_b", {}))
 
@@ -123,9 +157,7 @@ class ModeCompareWorker(_ABWorkerBase):
                 try:
                     stages = self._run_one(image_set, params)
                 except Exception as exc:
-                    self.progress.emit(
-                        f"Preset {idx + 1} failed: {exc}"
-                    )
+                    self.progress.emit(f"Entry {idx + 1} failed: {exc}")
                     stages = []
 
                 # Build per-preset contrast image if use_contrast is enabled
